@@ -16,6 +16,8 @@
     You should have received a copy of the GNU General Public License
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
  */
+#include "reios/gdrom_hle.h"
+#include "hw/gdrom/gdromv3.h"
 #include "gui.h"
 #include "rend/osd.h"
 #include "cfg/cfg.h"
@@ -3073,9 +3075,9 @@ static void gameTooltip(const std::string& tip)
     }
 }
 
-static bool gameImageButton(ImguiTexture& texture, const std::string& tooltip, ImVec2 size, const std::string& gameName)
+static bool gameImageButton(ImguiTexture& texture, const std::string& tooltip, ImVec2 size, const std::string& gameName, const std::string& path)
 {
-	bool pressed = texture.button("", size, gameName);
+	bool pressed = texture.button(path.c_str(), size, gameName);
 	gameTooltip(tooltip);
 
     return pressed;
@@ -3150,7 +3152,7 @@ static void gui_display_content()
 				GameMedia game;
 				GameBoxart art = boxart.getBoxartAndLoad(game);
 				ImguiFileTexture tex(art.boxartPath);
-				pressed = gameImageButton(tex, "Dreamcast BIOS", responsiveBoxVec2, "Dreamcast BIOS");
+				pressed = gameImageButton(tex, "Dreamcast BIOS", responsiveBoxVec2, "Dreamcast BIOS", "Dreamcast BIOS");
 			}
 			else
 			{
@@ -3192,7 +3194,7 @@ static void gui_display_content()
 						if (ImGui::BeginChild("img", ImVec2(0, 0), ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_NavFlattened))
 						{
 							ImguiFileTexture tex(art.boxartPath);
-							pressed = gameImageButton(tex, game.name, responsiveBoxVec2, gameName);
+							pressed = gameImageButton(tex, game.name, responsiveBoxVec2, gameName, game.path);
 						}
 						ImGui::EndChild();
 					}
@@ -3494,6 +3496,18 @@ static float fps = -1;
 
 static std::string getFPSNotification()
 {
+	std::string modeDescription;
+	if (gd_hle_state.status == 1)
+	{
+		modeDescription = "LOADING1..";
+	}
+	else
+	{
+		modeDescription = gd_state_description();
+	}
+
+	return modeDescription;
+#if false
 	if (config::ShowFPS)
 	{
 		u64 now = getTimeMs();
@@ -3510,6 +3524,7 @@ static std::string getFPSNotification()
 		}
 	}
 	return std::string(settings.input.fastForwardMode ? ">>" : "");
+#endif
 }
 
 void gui_draw_osd()

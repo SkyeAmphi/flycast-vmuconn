@@ -19,6 +19,9 @@ enum gd_states
 	gds_process_set_mode,
 };
 
+gd_states gd_get_state();
+std::string gd_state_description();
+
 //Structs & unions
 struct SpiCommandInfo
 {

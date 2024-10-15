@@ -15,6 +15,7 @@
 #include "hw/sh4/sh4_sched.h"
 #include "imgread/common.h"
 #include "serialize.h"
+#include <sstream>
 
 int gdrom_schid;
 
@@ -58,11 +59,54 @@ static ByteCount_t ByteCount;
 //end
 GD_HardwareInfo_t GD_HardwareInfo;
 
-#define printf_rm(...) DEBUG_LOG(GDROM, __VA_ARGS__)
-#define printf_ata(...) DEBUG_LOG(GDROM, __VA_ARGS__)
-#define printf_spi(...) DEBUG_LOG(GDROM, __VA_ARGS__)
-#define printf_spicmd(...) DEBUG_LOG(GDROM, __VA_ARGS__)
-#define printf_subcode(...) DEBUG_LOG(GDROM, __VA_ARGS__)
+#define printf_rm(...) NOTICE_LOG(GDROM, __VA_ARGS__)
+#define printf_ata(...) NOTICE_LOG(GDROM, __VA_ARGS__)
+#define printf_spi(...) NOTICE_LOG(GDROM, __VA_ARGS__)
+#define printf_spicmd(...) NOTICE_LOG(GDROM, __VA_ARGS__)
+#define printf_subcode(...) NOTICE_LOG(GDROM, __VA_ARGS__)
+
+gd_states gd_get_state()
+{
+	return gd_state;
+}
+
+std::string gd_state_description(gd_states state)
+{
+	switch (state)
+	{
+		case gds_waitcmd:
+			return "gds_waitcmd";
+		case gds_procata:
+			return "gds_procata";
+		case gds_waitpacket:
+			return "gds_waitpacket";
+		case gds_procpacket:
+			return "gds_procpacket";
+		case gds_pio_send_data:
+			return "gds_pio_send_data";
+		case gds_pio_get_data:
+			return "gds_pio_get_data";
+		case gds_pio_end:
+			return "gds_pio_end";
+		case gds_procpacketdone:
+			return "gds_procpacketdone";
+		case gds_readsector_pio:
+			return "gds_readsector_pio";
+		case gds_readsector_dma:
+			return "gds_readsector_dma";
+		case gds_process_set_mode:
+			return "gds_process_set_mode";
+	}
+	
+	std::ostringstream os;
+	os << "<" << (int)state << ">";
+	return os.str();
+}
+
+std::string gd_state_description()
+{
+	return gd_state_description(gd_state);
+}
 
 void libCore_CDDA_Sector(s16* sector)
 {
@@ -118,6 +162,8 @@ static void FillReadBuffer()
 static void gd_set_state(gd_states state)
 {
 	gd_states prev=gd_state;
+	if (prev != state)
+		NOTICE_LOG(GDROM, "State change %s -> %s\n", gd_state_description(prev), gd_state_description(state));
 	gd_state=state;
 	switch(state)
 	{
@@ -1152,6 +1198,7 @@ void WriteMem_gdrom(u32 Addr, u32 data, u32 sz)
 
 static int getGDROMTicks()
 {
+	// TODO: what adjustment here would be equivalent to the one in gdrom_hle?
 	if (SB_GDST & 1)
 	{
 		if (config::FastGDRomLoad)

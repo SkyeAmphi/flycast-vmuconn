@@ -68,15 +68,20 @@ static void GDROM_HLE_ReadTOC()
 template<bool virtual_addr>
 static void read_sectors_to(u32 addr, u32 sector, u32 count)
 {
+	const u32 MAX_SECTOR = 1024 * 1024 * 1024 / 2048;
+	const u32 AVERAGE_ACCESS_TIME = SH4_MAIN_CLOCK * .250;
+	u32 sector_diff = sector > gd_hle_state.cur_sector ? sector - gd_hle_state.cur_sector : gd_hle_state.cur_sector - sector;
+	u32 access_time = sector_diff > (MAX_SECTOR / 20) ? AVERAGE_ACCESS_TIME : 0;
+	NOTICE_LOG(REIOS, "Sector diff: %d, Access time: %d cycles / %d ms", sector_diff, access_time, access_time / (SH4_MAIN_CLOCK / 1000));
 	gd_hle_state.cur_sector = sector + count - 1;
 	if (virtual_addr)
 		gd_hle_state.xfer_end_time = 0;
 	else if (count > 5 && !config::FastGDRomLoad)
 		// Large Transfers: GD-ROM rate (approx. 1.8 MB/s)
-		gd_hle_state.xfer_end_time = sh4_sched_now64() + (u64)count * 2048 * 1000000L / 10240;
+		gd_hle_state.xfer_end_time = sh4_sched_now64() + (u64)count * 2048 * 1000000L / 10240 + access_time;
 	else
 		// Small transfers: Max G1 bus rate: 50 MHz x 16 bits
-		gd_hle_state.xfer_end_time = sh4_sched_now64() + 5 * 2048 * 2;
+		gd_hle_state.xfer_end_time = sh4_sched_now64() + 5 * 2048 * 2 + access_time;
 	if (!virtual_addr || !mmu_enabled())
 	{
 		u8 * pDst = GetMemPtr(addr, 0);
@@ -114,7 +119,7 @@ static void GDROM_HLE_ReadDMA()
 	u32 buffer = gd_hle_state.params[2];
 	// params[3] 0
 
-	debugf("GDROM: DMA READ Sector=%d, Num=%d, Buffer=%08x, zero=%x", fad, nsect, buffer, gd_hle_state.params[3]);
+	NOTICE_LOG(REIOS, "GDROM: DMA READ Sector=%d, Num=%d, Buffer=%08x, zero=%x", fad, nsect, buffer, gd_hle_state.params[3]);
 
 	read_sectors_to<false>(buffer, fad, nsect);
 	gd_hle_state.result[2] = 0;
