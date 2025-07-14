@@ -462,27 +462,37 @@ u32 dma(u32 cmd) override
     // Network VMU hook - check if this is port A1 and network is enabled
     if (bus_id == 0 && bus_port == 0) {
 #ifdef LIBRETRO
-        // Check if network VMU is enabled and we have a client
-        static bool networkEnabled = false;
-        static bool checkedOnce = false;
-        if (!checkedOnce) {
-            // Get the global network client from libretro
-            networkEnabled = (g_vmu_network_client != nullptr);
-            checkedOnce = true;
+        // Initialize network client if needed
+        if (!g_vmu_network_client) {
+            extern retro_environment_t environ_cb;
+            if (environ_cb) {
+                struct retro_variable var = {"flycast_vmu_network", NULL};
+                if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+                    if (strcmp(var.value, "enabled") == 0) {
+                        g_vmu_network_client = new VmuNetworkClient();
+                        if (g_vmu_network_client->connect()) {
+                            INFO_LOG(MAPLE, "Network VMU A1 connected to DreamPotato");
+                        } else {
+                            INFO_LOG(MAPLE, "Network VMU A1 failed to connect to DreamPotato");
+                            delete g_vmu_network_client;
+                            g_vmu_network_client = nullptr;
+                        }
+                    }
+                }
+            }
         }
         
-        if (networkEnabled && g_vmu_network_client && g_vmu_network_client->isConnected()) {
-            // Convert DMA command to MapleMsg and send to DreamPotato
+        // If we have a working network connection, send VMU operations to DreamPotato
+        if (g_vmu_network_client && g_vmu_network_client->isConnected()) {
             MapleMsg msg;
-            msg.command = cmd;
-            msg.destAP = (bus_id << 6) | (1 << bus_port);
+            msg.command = cmd & 0xFF;
+            msg.destAP = 0x20; // Port A, Slot 1
             msg.originAP = 0;
-            msg.size = std::min(dma_count_in / 4, (u32)(sizeof(msg.data) / 4));
+            msg.size = std::min(dma_count_in / 4, (u32)31); // Max 31 words
             
-            if (dma_count_in <= sizeof(msg.data)) {
+            if (dma_count_in <= 124) { // 31 words * 4 bytes
                 memcpy(msg.data, dma_buffer_in, dma_count_in);
                 
-                // Send to DreamPotato
                 if (g_vmu_network_client->sendMapleMessage(msg)) {
                     MapleMsg response;
                     if (g_vmu_network_client->receiveMapleMessage(response)) {
@@ -491,13 +501,12 @@ u32 dma(u32 cmd) override
                         memcpy(dma_buffer_out, response.data, copySize);
                         dma_count_out = copySize;
                         
-                        INFO_LOG(MAPLE, "Network VMU A1: cmd %d sent to DreamPotato", cmd);
-                        return response.command; // Return response command as result
+                        INFO_LOG(MAPLE, "Network VMU A1: Sent cmd %d to DreamPotato", cmd);
+                        return response.command;
                     }
                 }
                 
-                // Network failed, fall through to normal VMU
-                INFO_LOG(MAPLE, "Network VMU A1: network failed, using file VMU");
+                INFO_LOG(MAPLE, "Network VMU A1: Network communication failed, using file VMU");
             }
         }
 #endif

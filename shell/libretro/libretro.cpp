@@ -380,16 +380,23 @@ void retro_init()
 
 void retro_deinit()
 {
-	INFO_LOG(COMMON, "retro_deinit");
-	first_run = true;
-	memset(device_type, -1, sizeof(device_type));
+    INFO_LOG(COMMON, "retro_deinit");
+    first_run = true;
+    memset(device_type, -1, sizeof(device_type));
 
-	//When auto-save states are enabled this is needed to prevent the core from shutting down before
-	//any save state actions are still running - which results in partial saves
-	{
-		std::lock_guard<std::mutex> lock(mtx_serialization);
-	}
-	os_UninstallFaultHandler();
+    //When auto-save states are enabled this is needed to prevent the core from shutting down before
+    //any save state actions are still running - which results in partial saves
+    {
+        std::lock_guard<std::mutex> lock(mtx_serialization);
+    }
+    
+    // Cleanup network VMU client
+    if (g_vmu_network_client) {
+        delete g_vmu_network_client;
+        g_vmu_network_client = nullptr;
+    }
+    
+    os_UninstallFaultHandler();
 	
 #if defined(__APPLE__) || (defined(__GNUC__) && defined(__linux__) && !defined(__ANDROID__))
 	addrspace::release();
