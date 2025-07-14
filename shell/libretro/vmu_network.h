@@ -1,17 +1,35 @@
 #pragma once
 
 #ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
+    // Prevent Windows header pollution and conflicts
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    
+    // Include Windows headers in correct order
+    #include <windows.h>
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    
+    // Clean up problematic macros that conflict with C++
+    #ifdef min
+        #undef min
+    #endif
+    #ifdef max
+        #undef max
+    #endif
 #else
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#define SOCKET int
-#define INVALID_SOCKET -1
-#define SOCKET_ERROR -1
-#define closesocket close
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <unistd.h>
+    #define SOCKET int
+    #define INVALID_SOCKET -1
+    #define SOCKET_ERROR -1
+    #define closesocket close
 #endif
 
 #include <string>

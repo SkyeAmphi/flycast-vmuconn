@@ -495,10 +495,17 @@ u32 dma(u32 cmd) override
                 
                 if (g_vmu_network_client->sendMapleMessage(msg)) {
                     MapleMsg response;
-                    if (g_vmu_network_client->receiveMapleMessage(response)) {
-                        // Copy response back to DMA buffer
-                        u32 copySize = std::min(response.size * 4, (u32)128);
-                        memcpy(dma_buffer_out, response.data, copySize);
+					if (g_vmu_network_client->receiveMapleMessage(response)) {
+						// Copy response back to DMA buffer
+						u32 responseBytes = response.size * 4u;
+						u32 copySize = std::min(responseBytes, 128u);
+
+						// Validation for network protocol safety
+						if (responseBytes > sizeof(response.data)) {
+							WARN_LOG(MAPLE, "Network VMU: Response size exceeds buffer capacity");
+							copySize = std::min(copySize, static_cast<u32>(sizeof(response.data)));
+						}
+						memcpy(dma_buffer_out, response.data, copySize);
                         dma_count_out = copySize;
                         
                         INFO_LOG(MAPLE, "Network VMU A1: Sent cmd %d to DreamPotato", cmd);
