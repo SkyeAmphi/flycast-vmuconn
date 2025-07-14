@@ -24,6 +24,14 @@
 #include <memory>
 #include <array>
 
+// Conditional include prioritizing libretro safety
+#ifndef LIBRETRO
+    #include "input/mapping.h"  // Full include for SDL builds
+#else
+    // Forward declaration for libretro with minimal dependencies
+    class InputMapping;
+#endif
+
 // Common structures available to all build targets
 struct MapleMsg
 {
