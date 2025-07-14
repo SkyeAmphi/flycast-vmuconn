@@ -18,26 +18,13 @@
  */
 #pragma once
 
-// This file contains abstraction layer for access to different kinds of physical controllers
-
 #include "types.h"
 #include "emulator.h"
-
-// Only include SDL gamepad support when not building for libretro
-#if !defined(LIBRETRO)
-#include "sdl_gamepad.h"
-#endif
-
 #include <functional>
 #include <memory>
 #include <array>
 
-#if (defined(_WIN32) || defined(__linux__) || (defined(__APPLE__) && defined(TARGET_OS_MAC))) && !defined(TARGET_UWP)
-#define USE_DREAMCASTCONTROLLER 1
-#endif
-
-#include <memory>
-
+// Common structures available to all build targets
 struct MapleMsg
 {
 	u8 command = 0;
@@ -144,6 +131,11 @@ public:
 	virtual void disconnect() = 0;
 };
 
+// SDL-DEPENDENT CODE - Only include when not building for libretro
+#if !defined(LIBRETRO)
+
+#include "sdl_gamepad.h"
+
 class DreamLinkGamepad : public SDLGamepad
 {
 public:
@@ -176,3 +168,10 @@ private:
 extern std::vector<std::shared_ptr<DreamLink>> allDreamLinks;
 void createDreamLinkDevices(std::shared_ptr<DreamLink> dreamlink, bool gameStart);
 void tearDownDreamLinkDevices(std::shared_ptr<DreamLink> dreamlink);
+
+// Platform-specific feature flags
+#if (defined(_WIN32) || defined(__linux__) || (defined(__APPLE__) && defined(TARGET_OS_MAC))) && !defined(TARGET_UWP)
+#define USE_DREAMCASTCONTROLLER 1
+#endif
+
+#endif // !defined(LIBRETRO)
