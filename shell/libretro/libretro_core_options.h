@@ -1126,6 +1126,20 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       "disabled",
    },
    {
+      CORE_OPTION_NAME "_vmu_network",
+      "VMU Network Connection",
+      "VMU Network",
+      "Connect VMUs to DreamPotato emulator via network. When enabled, VMU A1 will connect to DreamPotato running on localhost:37393.",
+      NULL,
+      "vmu",
+      {
+         { "disabled", NULL },
+         { "enabled", NULL },
+         { NULL, NULL },
+      },
+      "disabled"
+   },
+   {
       CORE_OPTION_NAME "_vmu_sound",
       "Visual Memory Units/Systems (VMU) Sounds",
       "VMU Sounds",
