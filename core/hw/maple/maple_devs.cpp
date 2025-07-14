@@ -452,9 +452,58 @@ struct maple_sega_vmu: maple_base
 			std::fclose(file);
 	}
 
-	u32 dma(u32 cmd) override
-	{
-		//printf("maple_sega_vmu::dma Called for port %d:%d, Command %d\n", bus_id, bus_port, cmd);
+#ifdef LIBRETRO
+#include "../shell/libretro/vmu_network.h"
+extern VmuNetworkClient* g_vmu_network_client;
+#endif
+
+u32 dma(u32 cmd) override
+{
+    // Network VMU hook - check if this is port A1 and network is enabled
+    if (bus_id == 0 && bus_port == 0) {
+#ifdef LIBRETRO
+        // Check if network VMU is enabled and we have a client
+        static bool networkEnabled = false;
+        static bool checkedOnce = false;
+        if (!checkedOnce) {
+            // Get the global network client from libretro
+            networkEnabled = (g_vmu_network_client != nullptr);
+            checkedOnce = true;
+        }
+        
+        if (networkEnabled && g_vmu_network_client && g_vmu_network_client->isConnected()) {
+            // Convert DMA command to MapleMsg and send to DreamPotato
+            MapleMsg msg;
+            msg.command = cmd;
+            msg.destAP = (bus_id << 6) | (1 << bus_port);
+            msg.originAP = 0;
+            msg.size = std::min(dma_count_in / 4, (u32)(sizeof(msg.data) / 4));
+            
+            if (dma_count_in <= sizeof(msg.data)) {
+                memcpy(msg.data, dma_buffer_in, dma_count_in);
+                
+                // Send to DreamPotato
+                if (g_vmu_network_client->sendMapleMessage(msg)) {
+                    MapleMsg response;
+                    if (g_vmu_network_client->receiveMapleMessage(response)) {
+                        // Copy response back to DMA buffer
+                        u32 copySize = std::min(response.size * 4, (u32)128);
+                        memcpy(dma_buffer_out, response.data, copySize);
+                        dma_count_out = copySize;
+                        
+                        INFO_LOG(MAPLE, "Network VMU A1: cmd %d sent to DreamPotato", cmd);
+                        return response.command; // Return response command as result
+                    }
+                }
+                
+                // Network failed, fall through to normal VMU
+                INFO_LOG(MAPLE, "Network VMU A1: network failed, using file VMU");
+            }
+        }
+#endif
+    }
+    
+    //printf("maple_sega_vmu::dma Called for port %d:%d, Command %d\n", bus_id, bus_port, cmd);
 		switch (cmd)
 		{
 		case MDC_DeviceRequest:

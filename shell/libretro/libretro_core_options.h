@@ -1129,7 +1129,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       CORE_OPTION_NAME "_vmu_network",
       "VMU Network Connection",
       "VMU Network",
-      "Connect VMUs to DreamPotato emulator via network. When enabled, VMU A1 will connect to DreamPotato running on localhost:37393.",
+      "Connect VMU slots to DreamPotato emulator via network. When enabled, any slot configured as 'VMU' will attempt to connect to DreamPotato running on localhost:37393. Falls back to file-based VMU on connection failure.",
       NULL,
       "vmu",
       {

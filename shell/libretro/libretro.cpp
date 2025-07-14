@@ -102,6 +102,10 @@ constexpr char slash = path_default_slash_c();
 #include "libretro_core_option_defines.h"
 #include "libretro_core_options.h"
 #include "vmu_xhair.h"
+#include "vmu_network.h"
+
+VmuNetworkClient* g_vmu_network_client = nullptr;
+static bool g_network_vmu_enabled = false;
 
 extern void retro_audio_init(void);
 extern void retro_audio_deinit(void);
@@ -198,6 +202,7 @@ static void refresh_devices(bool first_startup);
 static void init_disk_control_interface();
 static bool read_m3u(const char *file);
 static void updateVibration(u32 port, float power, float inclination, u32 durationMs);
+static void initializeNetworkVmu();
 
 static std::string game_data;
 static char g_base_name[128];
@@ -360,6 +365,9 @@ void retro_init()
 #endif
 	os_InstallFaultHandler();
 	MapleConfigMap::UpdateVibration = updateVibration;
+
+    // Initialize network VMU handler
+    initializeNetworkVmu();
 
 #if defined(__APPLE__) || (defined(__GNUC__) && defined(__linux__) && !defined(__ANDROID__))
 	if (!emuInited)
@@ -2743,6 +2751,48 @@ void updateLightgunCoordinatesFromAnalogStick(int port)
 	lightgun_params[port].offscreen = false;
 	lightgun_params[port].x = mo_x_abs[port];
 	lightgun_params[port].y = mo_y_abs[port];
+}
+
+static bool shouldUseNetworkVmu(int port, int slot) {
+    // Check if VMU network is enabled
+    struct retro_variable var = {"flycast_vmu_network", NULL};
+    if (!environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) || !var.value || strcmp(var.value, "enabled") != 0) {
+        return false;
+    }
+    
+    // Check if this slot is configured as VMU
+    if (config::MapleExpansionDevices[port][slot] != MDT_SegaVMU) {
+        return false;
+    }
+    
+    // Only enable for Dreamcast platform
+    return platformIsDreamcast;
+}
+
+static void initializeNetworkVmu() {
+    struct retro_variable var = {"flycast_vmu_network", NULL};
+    if (environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        if (strcmp(var.value, "enabled") == 0) {
+            struct retro_message msg = {"Network VMU initialized - DreamPotato support ready", 180};
+            environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+        }
+    }
+}
+
+static void assignNetworkVmuIfNeeded(int port, int slot) {
+    // Only for A1 and only if network VMU enabled
+    if (port != 0 || slot != 0) return;
+    
+    if (config::MapleExpansionDevices[port][slot] != MDT_SegaVMU) return;
+    
+    struct retro_variable var = {"flycast_vmu_network", NULL};
+    if (environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        if (strcmp(var.value, "enabled") == 0) {
+			// TODO: Network VMU device creation will be implemented later
+			struct retro_message msg = {"Network VMU A1 ready for DreamPotato", 180};
+			environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+		}
+    }
 }
 
 static void UpdateInputStateNaomi(u32 port)
