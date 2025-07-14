@@ -15,6 +15,20 @@
 #endif
 
 #include <string>
+#include "types.h"  // For u8, u32 types
+
+// LibRetro-compatible MapleMsg struct
+struct MapleMsg {
+    u8 command = 0;
+    u8 destAP = 0;
+    u8 originAP = 0;
+    u8 size = 0;
+    u8 data[1024];
+
+    u32 getDataSize() const {
+        return size * 4;
+    }
+};
 
 class VmuNetworkClient {
 private:
@@ -32,8 +46,13 @@ public:
     void disconnect();
     bool isConnected() const { return connected; }
     
-    bool sendMessage(const std::string& message);
-    bool receiveMessage(std::string& response);
+    // DreamPotato protocol methods
+    bool sendMapleMessage(const MapleMsg& msg);
+    bool receiveMapleMessage(MapleMsg& msg);
+    
+private:
+    bool sendRawMessage(const std::string& message);
+    bool receiveRawMessage(std::string& response);
 };
 
 extern VmuNetworkClient* g_vmu_network_client;

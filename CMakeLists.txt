@@ -886,7 +886,9 @@ if(LIBRETRO)
 		shell/libretro/LogManager.h
 		shell/libretro/option.cpp
 		shell/libretro/oslib.cpp
-		shell/libretro/vmu_xhair.cpp)
+		shell/libretro/vmu_xhair.cpp
+		shell/libretro/vmu_network.h
+        shell/libretro/vmu_network.cpp)
 	if(APPLE)
 		target_sources(${PROJECT_NAME} PRIVATE shell/libretro/oslib_apple.mm)
 	endif()
