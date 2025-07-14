@@ -2,6 +2,9 @@
 #include "maple_cfg.h"
 #include "maple_helper.h"
 #include "maple_if.h"
+#ifdef LIBRETRO
+#include "../../../shell/libretro/vmu_network.h"
+#endif
 #include "hw/pvr/spg.h"
 #include "audio/audiostream.h"
 #include "oslib/oslib.h"
@@ -452,10 +455,6 @@ struct maple_sega_vmu: maple_base
 			std::fclose(file);
 	}
 
-#ifdef LIBRETRO
-#include "../shell/libretro/vmu_network.h"
-extern VmuNetworkClient* g_vmu_network_client;
-#endif
 
 u32 dma(u32 cmd) override
 {
@@ -481,7 +480,7 @@ u32 dma(u32 cmd) override
                 }
             }
         }
-        
+
         // If we have a working network connection, send VMU operations to DreamPotato
         if (g_vmu_network_client && g_vmu_network_client->isConnected()) {
             MapleMsg msg;
@@ -492,7 +491,7 @@ u32 dma(u32 cmd) override
             
             if (dma_count_in <= 124) { // 31 words * 4 bytes
                 memcpy(msg.data, dma_buffer_in, dma_count_in);
-                
+
                 if (g_vmu_network_client->sendMapleMessage(msg)) {
                     MapleMsg response;
 					if (g_vmu_network_client->receiveMapleMessage(response)) {
@@ -506,13 +505,13 @@ u32 dma(u32 cmd) override
 							copySize = std::min(copySize, static_cast<u32>(sizeof(response.data)));
 						}
 						memcpy(dma_buffer_out, response.data, copySize);
-                        dma_count_out = copySize;
+                        *dma_count_out = copySize;
                         
                         INFO_LOG(MAPLE, "Network VMU A1: Sent cmd %d to DreamPotato", cmd);
                         return response.command;
                     }
                 }
-                
+
                 INFO_LOG(MAPLE, "Network VMU A1: Network communication failed, using file VMU");
             }
         }

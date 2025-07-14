@@ -22,7 +22,11 @@
 
 #include "types.h"
 #include "emulator.h"
+
+// Only include SDL gamepad support when not building for libretro
+#if !defined(LIBRETRO)
 #include "sdl_gamepad.h"
+#endif
 
 #include <functional>
 #include <memory>
