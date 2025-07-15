@@ -63,4 +63,4 @@ private:
     bool receiveRawMessage(std::string& response);
 };
 
-extern VmuNetworkClient* g_vmu_network_client;
+extern std::unique_ptr<VmuNetworkClient> g_vmu_network_client;

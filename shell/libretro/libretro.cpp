@@ -104,8 +104,6 @@ constexpr char slash = path_default_slash_c();
 #include "vmu_xhair.h"
 #include "vmu_network.h"
 
-VmuNetworkClient* g_vmu_network_client = nullptr;
-
 extern void retro_audio_init(void);
 extern void retro_audio_deinit(void);
 extern void retro_audio_flush_buffer(void);
@@ -389,10 +387,9 @@ void retro_deinit()
         std::lock_guard<std::mutex> lock(mtx_serialization);
     }
     
-    // Cleanup network VMU client
+    // Cleanup network VMU client using std::unique_ptr semantics
     if (g_vmu_network_client) {
-        delete g_vmu_network_client;
-        g_vmu_network_client = nullptr;
+        g_vmu_network_client.reset();  // Use reset() instead of delete
     }
     
     os_UninstallFaultHandler();
@@ -2779,17 +2776,16 @@ static void initializeNetworkVmu() {
     struct retro_variable var = {"flycast_vmu_network", NULL};
     if (environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
         if (strcmp(var.value, "enabled") == 0) {
-            // Create the global network client
+            // Create the global network client using std::unique_ptr
             if (!g_vmu_network_client) {
-                g_vmu_network_client = new VmuNetworkClient();
+                g_vmu_network_client = std::make_unique<VmuNetworkClient>();
                 if (g_vmu_network_client->connect()) {
                     struct retro_message msg = {"Network VMU A1 connected to DreamPotato", 180};
                     environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
                 } else {
                     struct retro_message msg = {"Network VMU failed to connect to DreamPotato", 180};
                     environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
-                    delete g_vmu_network_client;
-                    g_vmu_network_client = nullptr;
+                    g_vmu_network_client.reset();  // Use reset() instead of delete
                 }
             }
         }

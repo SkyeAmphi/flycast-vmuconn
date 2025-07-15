@@ -3,7 +3,7 @@
 #include <iomanip>
 
 
-VmuNetworkClient* g_vmu_network_client = nullptr;
+std::unique_ptr<VmuNetworkClient> g_vmu_network_client = nullptr;
 
 VmuNetworkClient::VmuNetworkClient() {
 #ifdef _WIN32
