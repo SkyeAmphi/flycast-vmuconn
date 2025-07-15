@@ -37,8 +37,6 @@
 #endif
 #include <hw/maple/maple_if.h>
 
-// TODO: it doesn't seem sound to assume that only one dreamlink will need reconnecting at a time.
-std::shared_ptr<DreamLink> dreamlink_needs_reconnect = nullptr;
 
 static asio::error_code sendMsg(const MapleMsg& msg, asio::ip::tcp::iostream& stream)
 {
@@ -137,7 +135,10 @@ void DreamConn::reloadConfigurationIfNeeded() {
 				return;
 			}
 			NOTICE_LOG(INPUT, "Reloading DreamcastController devices bus[%d]: Type:%s, VMU:%d, Rumble Pack:%d", bus, getName().c_str(), hasVmu(), hasRumble());
-			dreamlink_needs_reconnect = shared_from_this();
+            if (g_dreamlink_manager) {
+                g_dreamlink_manager->markForReconnect(shared_from_this());
+            }
+
 			maple_ReconnectDevices();
 		}
 	}

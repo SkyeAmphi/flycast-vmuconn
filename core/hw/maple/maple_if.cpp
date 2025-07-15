@@ -49,7 +49,7 @@ bool SDCKBOccupied;
 
 void maple_vblank()
 {
-	for (auto& dreamlink : allDreamLinks)
+    for (auto& dreamlink : getAllDreamLinks())
 	{
 		dreamlink->reloadConfigurationIfNeeded();
 	}
@@ -382,9 +382,10 @@ static u64 reconnect_time;
 
 void maple_ReconnectDevices()
 {
-	if (dreamlink_needs_reconnect)
-	{
-		tearDownDreamLinkDevices(dreamlink_needs_reconnect);
+    auto reconnectLink = getDreamLinkNeedsReconnect();
+    if (reconnectLink)
+    {
+		tearDownDreamLinkDevices(reconnectLink);
 	}
 	mcfg_DestroyDevices();
 	reconnect_time = sh4_sched_now64() + SH4_MAIN_CLOCK / 10;
@@ -397,10 +398,11 @@ static void maple_handle_reconnect()
 		reconnect_time = 0;
 		mcfg_CreateDevices();
 
-		if (dreamlink_needs_reconnect)
-		{
-			createDreamLinkDevices(dreamlink_needs_reconnect, false);
-			dreamlink_needs_reconnect = nullptr;
+        auto reconnectLink = getDreamLinkNeedsReconnect();
+        if (reconnectLink)
+        {
+			createDreamLinkDevices(reconnectLink, false);
+            clearDreamLinkNeedsReconnect();
 		}
 	}
 }
