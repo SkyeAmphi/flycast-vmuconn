@@ -25,9 +25,9 @@ bool VmuNetworkClient::connect() {
     socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd == INVALID_SOCKET) return false;
     
-    // Set socket timeouts - important even for localhost
+    // Set socket timeouts
     struct timeval timeout;
-    timeout.tv_sec = 2;  // 2 second timeout for localhost
+    timeout.tv_sec = 2;  // 2 second timeout
     timeout.tv_usec = 0;
     
 #ifdef _WIN32

@@ -139,6 +139,24 @@ public:
 	virtual void disconnect() = 0;
 };
 
+// Manager interface for cross-platform DreamLink operations
+class DreamLinkManager {
+public:
+    virtual ~DreamLinkManager() = default;
+    
+    //! Called every frame to update DreamLink devices
+    virtual void processVblank() = 0;
+    
+    //! Handle device reconnection events
+    virtual void handleReconnect() = 0;
+    
+    //! Reload all device configurations
+    virtual void reloadAllConfigurations() = 0;
+};
+
+// Global manager instance
+extern std::unique_ptr<DreamLinkManager> g_dreamlink_manager;
+
 // SDL-DEPENDENT CODE - Only include when not building for libretro
 #if !defined(LIBRETRO)
 
@@ -173,6 +191,14 @@ private:
 	std::string device_guid;
 };
 
+// SDL implementation of DreamLink manager
+class SDLDreamLinkManager : public DreamLinkManager {
+public:
+    void processVblank() override;
+    void handleReconnect() override;
+    void reloadAllConfigurations() override;
+};
+
 extern std::vector<std::shared_ptr<DreamLink>> allDreamLinks;
 void createDreamLinkDevices(std::shared_ptr<DreamLink> dreamlink, bool gameStart);
 void tearDownDreamLinkDevices(std::shared_ptr<DreamLink> dreamlink);
@@ -181,5 +207,20 @@ void tearDownDreamLinkDevices(std::shared_ptr<DreamLink> dreamlink);
 #if (defined(_WIN32) || defined(__linux__) || (defined(__APPLE__) && defined(TARGET_OS_MAC))) && !defined(TARGET_UWP)
 #define USE_DREAMCASTCONTROLLER 1
 #endif
+
+#else // defined(LIBRETRO)
+
+// LibRetro implementation of DreamLink manager
+class LibretroDreamLinkManager : public DreamLinkManager {
+public:
+    void processVblank() override;
+    void handleReconnect() override;
+    void reloadAllConfigurations() override;
+};
+
+// Keep only declarations for libretro
+extern std::vector<std::shared_ptr<DreamLink>> allDreamLinks;
+void createDreamLinkDevices(std::shared_ptr<DreamLink> dreamlink, bool gameStart);
+void tearDownDreamLinkDevices(std::shared_ptr<DreamLink> dreamlink);
 
 #endif // !defined(LIBRETRO)
