@@ -1,5 +1,6 @@
 build/
 artifact/
+build-gcc/
 
 # macOS
 .DS_Store

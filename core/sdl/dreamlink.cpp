@@ -46,8 +46,6 @@
 #include <setupapi.h>
 #endif
 
-std::vector<std::shared_ptr<DreamLink>> allDreamLinks = {};
-
 bool DreamLinkGamepad::isDreamcastController(int deviceIndex)
 {
 	char guid_str[33] {};
@@ -284,6 +282,8 @@ std::shared_ptr<InputMapping> DreamLinkGamepad::getDefaultMapping() {
 
 // Global vector for libretro
 std::vector<std::shared_ptr<DreamLink>> allDreamLinks{};
+
+std::shared_ptr<DreamLink> dreamlink_needs_reconnect = nullptr;
 
 void LibretroDreamLinkManager::processVblank() {
     // LibRetro handles device updates through RetroArch
