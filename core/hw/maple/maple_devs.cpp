@@ -461,25 +461,24 @@ u32 dma(u32 cmd) override
     // Network VMU hook - check if this is port A1 and network is enabled
     if (bus_id == 0 && bus_port == 0) {
 #ifdef LIBRETRO
-        // Initialize network client if needed
-        if (!g_vmu_network_client) {
-            extern retro_environment_t environ_cb;
-            if (environ_cb) {
-                struct retro_variable var = {"flycast_vmu_network", NULL};
-                if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
-                    if (strcmp(var.value, "enabled") == 0) {
-                        g_vmu_network_client = new VmuNetworkClient();
-                        if (g_vmu_network_client->connect()) {
-                            INFO_LOG(MAPLE, "Network VMU A1 connected to DreamPotato");
-                        } else {
-                            INFO_LOG(MAPLE, "Network VMU A1 failed to connect to DreamPotato");
-                            delete g_vmu_network_client;
-                            g_vmu_network_client = nullptr;
-                        }
+    // Initialize network client if needed
+    if (!g_vmu_network_client) {
+        extern retro_environment_t environ_cb;
+        if (environ_cb) {
+            struct retro_variable var = {"flycast_vmu_network", NULL};
+            if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+                if (strcmp(var.value, "enabled") == 0) {
+                    g_vmu_network_client = std::make_unique<VmuNetworkClient>();
+                    if (g_vmu_network_client->connect()) {
+                        INFO_LOG(MAPLE, "Network VMU A1 connected to DreamPotato");
+                    } else {
+                        INFO_LOG(MAPLE, "Network VMU A1 failed to connect to DreamPotato");
+                        g_vmu_network_client.reset();  
                     }
                 }
             }
         }
+    }
 
         // If we have a working network connection, send VMU operations to DreamPotato
         if (g_vmu_network_client && g_vmu_network_client->isConnected()) {

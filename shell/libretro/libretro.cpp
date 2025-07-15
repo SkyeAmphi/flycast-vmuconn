@@ -109,6 +109,9 @@ extern void retro_audio_deinit(void);
 extern void retro_audio_flush_buffer(void);
 extern void retro_audio_upload(void);
 
+extern std::unique_ptr<VmuNetworkClient> g_vmu_network_client;
+std::unique_ptr<DreamLinkManager> g_dreamlink_manager = nullptr;
+
 std::string arcadeFlashPath;
 static bool boot_to_bios;
 
@@ -136,6 +139,10 @@ static bool textureUpscaleEnabled = false;
 #endif
 static bool vmuScreenSettingsShown = true;
 static bool lightgunSettingsShown = true;
+
+static bool network_vmu_enabled = false;
+static bool network_vmu_connected = false;
+static bool network_vmu_connection_attempted = false;
 
 u32 kcode[4] = {0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
 u16 rt[4];
@@ -327,6 +334,8 @@ void retro_init()
 	LogManager::Init((void *)log_cb);
 	NOTICE_LOG(BOOT, "retro_init");
 
+	initializeDreamLinkManager();
+
 	if (environ_cb(RETRO_ENVIRONMENT_GET_PERF_INTERFACE, &perf_cb))
 		perf_get_cpu_features_cb = perf_cb.get_cpu_features;
 	else
@@ -387,6 +396,11 @@ void retro_deinit()
         std::lock_guard<std::mutex> lock(mtx_serialization);
     }
     
+	shutdownNetworkVmu();
+	shutdownDreamLinkManager();
+    network_vmu_enabled = false;
+    network_vmu_connection_attempted = false;
+
     // Cleanup network VMU client using std::unique_ptr semantics
     if (g_vmu_network_client) {
         g_vmu_network_client.reset();  // Use reset() instead of delete
@@ -456,6 +470,8 @@ static bool set_variable_visibility(void)
 		option_display.key = CORE_OPTION_NAME "_language";
 		environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
 		option_display.key = CORE_OPTION_NAME "_force_wince";
+		environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
+		option_display.key = CORE_OPTION_NAME "_vmu_network";
 		environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
 		option_display.key = CORE_OPTION_NAME "_per_content_vmus";
 		environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
@@ -955,6 +971,32 @@ static void update_variables(bool first_startup)
 	char key[256];
 	key[0] = '\0';
 
+	var.key = CORE_OPTION_NAME "_vmu_network";
+    bool prev_network_vmu_enabled = network_vmu_enabled;
+    network_vmu_enabled = false;
+    
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        network_vmu_enabled = (strcmp(var.value, "enabled") == 0);
+    }
+    
+    // If network VMU setting changed, reinitialize
+    if (first_startup || (network_vmu_enabled != prev_network_vmu_enabled)) {
+        if (network_vmu_enabled) {
+            // Reset connection state to allow retry
+            network_vmu_connection_attempted = false;
+            attemptNetworkVmuConnection();
+        } else {
+            // Disable network VMU
+            shutdownNetworkVmu();
+            network_vmu_connection_attempted = false;
+        }
+        
+        // Trigger device refresh to reassign VMUs
+        if (settings.platform.isConsole()) {
+            devices_need_refresh = true;
+        }
+    }
+
 	var.key = key ;
 	for (int i = 0 ; i < 4 ; i++)
 	{
@@ -1181,6 +1223,10 @@ void retro_run()
 
 	if (devices_need_refresh)
 		refresh_devices(false);
+
+	if (network_vmu_enabled) {
+        checkNetworkVmuConnection();
+    }
 
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
 	if (isOpenGL(config::RendererType))
@@ -2287,6 +2333,10 @@ bool retro_load_game(const struct retro_game_info *game)
 	haveCardReader = card_reader::readerAvailable();
 	refresh_devices(true);
 
+	if (settings.platform.isConsole() && network_vmu_enabled) {
+        attemptNetworkVmuConnection();
+    }
+
 	// System may have changed - have to update hidden core options
 	set_variable_visibility();
 
@@ -2756,20 +2806,16 @@ void updateLightgunCoordinatesFromAnalogStick(int port)
 	lightgun_params[port].y = mo_y_abs[port];
 }
 
-static bool shouldUseNetworkVmu(int port, int slot) {
-    // Check if VMU network is enabled
-    struct retro_variable var = {"flycast_vmu_network", NULL};
-    if (!environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) || !var.value || strcmp(var.value, "enabled") != 0) {
-        return false;
+static void initializeDreamLinkManager() {
+    if (!g_dreamlink_manager) {
+        g_dreamlink_manager = std::make_unique<LibretroDreamLinkManager>();
     }
-    
-    // Check if this slot is configured as VMU
-    if (config::MapleExpansionDevices[port][slot] != MDT_SegaVMU) {
-        return false;
+}
+
+void shutdownDreamLinkManager() {
+    if (g_dreamlink_manager) {
+        g_dreamlink_manager.reset();
     }
-    
-    // Only enable for Dreamcast platform
-    return platformIsDreamcast;
 }
 
 static void initializeNetworkVmu() {
@@ -2780,31 +2826,68 @@ static void initializeNetworkVmu() {
             if (!g_vmu_network_client) {
                 g_vmu_network_client = std::make_unique<VmuNetworkClient>();
                 if (g_vmu_network_client->connect()) {
+                    network_vmu_connected = true;
                     struct retro_message msg = {"Network VMU A1 connected to DreamPotato", 180};
                     environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
                 } else {
+                    network_vmu_connected = false;
                     struct retro_message msg = {"Network VMU failed to connect to DreamPotato", 180};
                     environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
-                    g_vmu_network_client.reset();  // Use reset() instead of delete
+                    g_vmu_network_client.reset();
                 }
             }
+            network_vmu_connection_attempted = true;
         }
     }
 }
 
-static void assignNetworkVmuIfNeeded(int port, int slot) {
-    // Only for A1 and only if network VMU enabled
-    if (port != 0 || slot != 0) return;
+static void shutdownNetworkVmu() {
+    if (g_vmu_network_client) {
+        g_vmu_network_client.reset();
+        network_vmu_connected = false;
+    }
+}
+
+static bool attemptNetworkVmuConnection() {
+    if (!network_vmu_enabled || network_vmu_connection_attempted) {
+        return network_vmu_connected;
+    }
     
-    if (config::MapleExpansionDevices[port][slot] != MDT_SegaVMU) return;
+    network_vmu_connection_attempted = true;
     
-    struct retro_variable var = {"flycast_vmu_network", NULL};
-    if (environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
-        if (strcmp(var.value, "enabled") == 0) {
-			// TODO: Network VMU device creation will be implemented later
-			struct retro_message msg = {"Network VMU A1 ready for DreamPotato", 180};
-			environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
-		}
+    if (!g_vmu_network_client) {
+        g_vmu_network_client = std::make_unique<VmuNetworkClient>();
+    }
+    
+    if (g_vmu_network_client->connect()) {
+        network_vmu_connected = true;
+        struct retro_message msg = {"Network VMU A1 connected to DreamPotato", 180};
+        environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+    } else {
+        network_vmu_connected = false;
+        struct retro_message msg = {"Network VMU failed to connect to DreamPotato", 180};
+        environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+    }
+    
+    return network_vmu_connected;
+}
+
+static void checkNetworkVmuConnection() {
+    if (!network_vmu_enabled) {
+        return;
+    }
+    
+    if (!network_vmu_connected && !network_vmu_connection_attempted) {
+        attemptNetworkVmuConnection();
+    }
+    
+    // Check if connection is still alive
+    if (network_vmu_connected && g_vmu_network_client) {
+        if (!g_vmu_network_client->isConnected()) {
+            network_vmu_connected = false;
+            struct retro_message msg = {"Network VMU A1 disconnected from DreamPotato", 120};
+            environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+        }
     }
 }
 
