@@ -112,6 +112,9 @@ extern void retro_audio_upload(void);
 extern std::unique_ptr<VmuNetworkClient> g_vmu_network_client;
 std::unique_ptr<DreamLinkManager> g_dreamlink_manager = nullptr;
 
+class DreamLinkManager;
+class LibretroDreamLinkManager;
+
 std::string arcadeFlashPath;
 static bool boot_to_bios;
 
