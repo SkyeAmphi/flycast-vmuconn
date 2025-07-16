@@ -1,9 +1,15 @@
 #include "vmu_network.h"
 #include <sstream>
 #include <iomanip>
+#include <libretro.h>
 
 
 std::unique_ptr<VmuNetworkClient> g_vmu_network_client = nullptr;
+
+static bool network_vmu_enabled = false;
+static bool network_vmu_connected = false;
+static bool network_vmu_connection_attempted = false;
+static retro_environment_t environ_cb = nullptr;
 
 VmuNetworkClient::VmuNetworkClient() {
 #ifdef _WIN32
@@ -134,4 +140,85 @@ bool VmuNetworkClient::receiveMapleMessage(MapleMsg& msg) {
     }
     
     return true;
+}
+
+void initNetworkVmuSystem(retro_environment_t env_cb) {
+    environ_cb = env_cb;
+}
+
+void updateNetworkVmuEnabled(bool enabled) {
+    network_vmu_enabled = enabled;
+}
+
+void initializeNetworkVmu() {
+    struct retro_variable var = {"flycast_vmu_network", NULL};
+    if (environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        if (strcmp(var.value, "enabled") == 0) {
+            // Create the global network client using std::unique_ptr
+            if (!g_vmu_network_client) {
+                g_vmu_network_client = std::make_unique<VmuNetworkClient>();
+                if (g_vmu_network_client->connect()) {
+                    network_vmu_connected = true;
+                    struct retro_message msg = {"Network VMU A1 connected to DreamPotato", 180};
+                    environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+                } else {
+                    network_vmu_connected = false;
+                    struct retro_message msg = {"Network VMU failed to connect to DreamPotato", 180};
+                    environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+                    g_vmu_network_client.reset();
+                }
+            }
+            network_vmu_connection_attempted = true;
+        }
+    }
+}
+
+void shutdownNetworkVmu() {
+    if (g_vmu_network_client) {
+        g_vmu_network_client.reset();
+        network_vmu_connected = false;
+    }
+}
+
+bool attemptNetworkVmuConnection() {
+    if (!network_vmu_enabled || network_vmu_connection_attempted) {
+        return network_vmu_connected;
+    }
+    
+    network_vmu_connection_attempted = true;
+    
+    if (!g_vmu_network_client) {
+        g_vmu_network_client = std::make_unique<VmuNetworkClient>();
+    }
+    
+    if (g_vmu_network_client->connect()) {
+        network_vmu_connected = true;
+        struct retro_message msg = {"Network VMU A1 connected to DreamPotato", 180};
+        environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+    } else {
+        network_vmu_connected = false;
+        struct retro_message msg = {"Network VMU failed to connect to DreamPotato", 180};
+        environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+    }
+    
+    return network_vmu_connected;
+}
+
+void checkNetworkVmuConnection() {
+    if (!network_vmu_enabled) {
+        return;
+    }
+    
+    if (!network_vmu_connected && !network_vmu_connection_attempted) {
+        attemptNetworkVmuConnection();
+    }
+    
+    // Check if connection is still alive
+    if (network_vmu_connected && g_vmu_network_client) {
+        if (!g_vmu_network_client->isConnected()) {
+            network_vmu_connected = false;
+            struct retro_message msg = {"Network VMU A1 disconnected from DreamPotato", 120};
+            environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+        }
+    }
 }
