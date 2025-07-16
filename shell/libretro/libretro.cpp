@@ -110,10 +110,6 @@ extern void retro_audio_flush_buffer(void);
 extern void retro_audio_upload(void);
 
 extern std::unique_ptr<VmuNetworkClient> g_vmu_network_client;
-std::unique_ptr<DreamLinkManager> g_dreamlink_manager = nullptr;
-
-class DreamLinkManager;
-class LibretroDreamLinkManager;
 
 std::string arcadeFlashPath;
 static bool boot_to_bios;
@@ -337,8 +333,6 @@ void retro_init()
 	LogManager::Init((void *)log_cb);
 	NOTICE_LOG(BOOT, "retro_init");
 
-	initializeDreamLinkManager();
-
 	if (environ_cb(RETRO_ENVIRONMENT_GET_PERF_INTERFACE, &perf_cb))
 		perf_get_cpu_features_cb = perf_cb.get_cpu_features;
 	else
@@ -400,7 +394,6 @@ void retro_deinit()
     }
     
 	shutdownNetworkVmu();
-	shutdownDreamLinkManager();
     network_vmu_enabled = false;
     network_vmu_connection_attempted = false;
 
@@ -2807,18 +2800,6 @@ void updateLightgunCoordinatesFromAnalogStick(int port)
 	lightgun_params[port].offscreen = false;
 	lightgun_params[port].x = mo_x_abs[port];
 	lightgun_params[port].y = mo_y_abs[port];
-}
-
-static void initializeDreamLinkManager() {
-    if (!g_dreamlink_manager) {
-        g_dreamlink_manager = std::make_unique<LibretroDreamLinkManager>();
-    }
-}
-
-void shutdownDreamLinkManager() {
-    if (g_dreamlink_manager) {
-        g_dreamlink_manager.reset();
-    }
 }
 
 static void initializeNetworkVmu() {
