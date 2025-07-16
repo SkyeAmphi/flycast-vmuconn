@@ -140,7 +140,6 @@ static bool vmuScreenSettingsShown = true;
 static bool lightgunSettingsShown = true;
 
 static bool network_vmu_enabled = false;
-static bool network_vmu_connected = false;
 static bool network_vmu_connection_attempted = false;
 
 u32 kcode[4] = {0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
@@ -205,7 +204,18 @@ static void refresh_devices(bool first_startup);
 static void init_disk_control_interface();
 static bool read_m3u(const char *file);
 static void updateVibration(u32 port, float power, float inclination, u32 durationMs);
-static void initializeNetworkVmu();
+
+static void shutdownNetworkVmu() {
+    ::shutdownNetworkVmu();
+}
+
+static bool attemptNetworkVmuConnection() {
+    return ::attemptNetworkVmuConnection();
+}
+
+static void checkNetworkVmuConnection() {
+    ::checkNetworkVmuConnection();
+}
 
 static std::string game_data;
 static char g_base_name[128];
@@ -370,7 +380,7 @@ void retro_init()
 	MapleConfigMap::UpdateVibration = updateVibration;
 
     // Initialize network VMU handler
-    initializeNetworkVmu();
+	initNetworkVmuSystem(environ_cb);
 
 #if defined(__APPLE__) || (defined(__GNUC__) && defined(__linux__) && !defined(__ANDROID__))
 	if (!emuInited)
@@ -394,8 +404,6 @@ void retro_deinit()
     }
     
 	shutdownNetworkVmu();
-    network_vmu_enabled = false;
-    network_vmu_connection_attempted = false;
 
     // Cleanup network VMU client using std::unique_ptr semantics
     if (g_vmu_network_client) {
@@ -974,7 +982,10 @@ static void update_variables(bool first_startup)
     if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
         network_vmu_enabled = (strcmp(var.value, "enabled") == 0);
     }
-    
+
+    // Update the vmu_network system with the current setting
+	updateNetworkVmuEnabled(network_vmu_enabled);
+	
     // If network VMU setting changed, reinitialize
     if (first_startup || (network_vmu_enabled != prev_network_vmu_enabled)) {
         if (network_vmu_enabled) {
@@ -2800,79 +2811,6 @@ void updateLightgunCoordinatesFromAnalogStick(int port)
 	lightgun_params[port].offscreen = false;
 	lightgun_params[port].x = mo_x_abs[port];
 	lightgun_params[port].y = mo_y_abs[port];
-}
-
-static void initializeNetworkVmu() {
-    struct retro_variable var = {"flycast_vmu_network", NULL};
-    if (environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
-        if (strcmp(var.value, "enabled") == 0) {
-            // Create the global network client using std::unique_ptr
-            if (!g_vmu_network_client) {
-                g_vmu_network_client = std::make_unique<VmuNetworkClient>();
-                if (g_vmu_network_client->connect()) {
-                    network_vmu_connected = true;
-                    struct retro_message msg = {"Network VMU A1 connected to DreamPotato", 180};
-                    environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
-                } else {
-                    network_vmu_connected = false;
-                    struct retro_message msg = {"Network VMU failed to connect to DreamPotato", 180};
-                    environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
-                    g_vmu_network_client.reset();
-                }
-            }
-            network_vmu_connection_attempted = true;
-        }
-    }
-}
-
-static void shutdownNetworkVmu() {
-    if (g_vmu_network_client) {
-        g_vmu_network_client.reset();
-        network_vmu_connected = false;
-    }
-}
-
-static bool attemptNetworkVmuConnection() {
-    if (!network_vmu_enabled || network_vmu_connection_attempted) {
-        return network_vmu_connected;
-    }
-    
-    network_vmu_connection_attempted = true;
-    
-    if (!g_vmu_network_client) {
-        g_vmu_network_client = std::make_unique<VmuNetworkClient>();
-    }
-    
-    if (g_vmu_network_client->connect()) {
-        network_vmu_connected = true;
-        struct retro_message msg = {"Network VMU A1 connected to DreamPotato", 180};
-        environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
-    } else {
-        network_vmu_connected = false;
-        struct retro_message msg = {"Network VMU failed to connect to DreamPotato", 180};
-        environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
-    }
-    
-    return network_vmu_connected;
-}
-
-static void checkNetworkVmuConnection() {
-    if (!network_vmu_enabled) {
-        return;
-    }
-    
-    if (!network_vmu_connected && !network_vmu_connection_attempted) {
-        attemptNetworkVmuConnection();
-    }
-    
-    // Check if connection is still alive
-    if (network_vmu_connected && g_vmu_network_client) {
-        if (!g_vmu_network_client->isConnected()) {
-            network_vmu_connected = false;
-            struct retro_message msg = {"Network VMU A1 disconnected from DreamPotato", 120};
-            environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
-        }
-    }
 }
 
 static void UpdateInputStateNaomi(u32 port)

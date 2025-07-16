@@ -63,4 +63,13 @@ private:
     bool receiveRawMessage(std::string& response);
 };
 
+// Network VMU system management
+void updateNetworkVmuEnabled(bool enabled);
+
+// Network VMU lifecycle functions  
+void initializeNetworkVmu();
+void shutdownNetworkVmu();
+bool attemptNetworkVmuConnection();
+void checkNetworkVmuConnection();
+
 extern std::unique_ptr<VmuNetworkClient> g_vmu_network_client;
