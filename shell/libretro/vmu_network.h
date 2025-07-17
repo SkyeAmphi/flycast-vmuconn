@@ -35,8 +35,16 @@
 #include <string>
 #include "types.h"  // For u8, u32 types
 
-// Use the canonical MapleMsg from dreamlink.h
-#include "../../core/sdl/dreamlink.h"
+// include of canonical MapleMsg from "../../core/sdl/dreamlink.h" could cause circular dependency issues
+struct MapleMsg {
+    u8 command = 0;
+    u8 destAP = 0; 
+    u8 originAP = 0;
+    u8 size = 0;
+    u8 data[1024];
+    
+    u32 getDataSize() const { return size * 4; }
+};
 
 class VmuNetworkClient {
 private:
@@ -64,6 +72,7 @@ private:
 };
 
 // Network VMU system management
+void initNetworkVmuSystem(retro_environment_t env_cb);
 void updateNetworkVmuEnabled(bool enabled);
 
 // Network VMU lifecycle functions  
