@@ -9,8 +9,10 @@
 #include "hw/naomi/card_reader.h"
 
 #include <memory>
+#ifndef LIBRETRO
 #include <sdl/dreamlink.h>
 #include <sdl/dreamconn.h>
+#endif
 
 enum MaplePattern
 {
@@ -49,10 +51,12 @@ bool SDCKBOccupied;
 
 void maple_vblank()
 {
+#ifndef LIBRETRO
     for (auto& dreamlink : getAllDreamLinks())
-	{
-		dreamlink->reloadConfigurationIfNeeded();
-	}
+    {
+        dreamlink->reloadConfigurationIfNeeded();
+    }
+#endif
 
 	if (SB_MDEN & 1)
 	{
@@ -382,11 +386,13 @@ static u64 reconnect_time;
 
 void maple_ReconnectDevices()
 {
+#ifndef LIBRETRO
     auto reconnectLink = getDreamLinkNeedsReconnect();
     if (reconnectLink)
     {
-		tearDownDreamLinkDevices(reconnectLink);
-	}
+        tearDownDreamLinkDevices(reconnectLink);
+    }
+#endif
 	mcfg_DestroyDevices();
 	reconnect_time = sh4_sched_now64() + SH4_MAIN_CLOCK / 10;
 }
@@ -398,11 +404,13 @@ static void maple_handle_reconnect()
 		reconnect_time = 0;
 		mcfg_CreateDevices();
 
+#ifndef LIBRETRO
         auto reconnectLink = getDreamLinkNeedsReconnect();
         if (reconnectLink)
         {
-			createDreamLinkDevices(reconnectLink, false);
+            createDreamLinkDevices(reconnectLink, false);
             clearDreamLinkNeedsReconnect();
-		}
+        }
+#endif
 	}
 }
