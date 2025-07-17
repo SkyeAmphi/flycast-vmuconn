@@ -139,9 +139,6 @@ static bool textureUpscaleEnabled = false;
 static bool vmuScreenSettingsShown = true;
 static bool lightgunSettingsShown = true;
 
-static bool network_vmu_enabled = false;
-static bool network_vmu_connection_attempted = false;
-
 u32 kcode[4] = {0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
 u16 rt[4];
 u16 lt[4];
@@ -204,18 +201,6 @@ static void refresh_devices(bool first_startup);
 static void init_disk_control_interface();
 static bool read_m3u(const char *file);
 static void updateVibration(u32 port, float power, float inclination, u32 durationMs);
-
-static void shutdownNetworkVmu() {
-    ::shutdownNetworkVmu();
-}
-
-static bool attemptNetworkVmuConnection() {
-    return ::attemptNetworkVmuConnection();
-}
-
-static void checkNetworkVmuConnection() {
-    ::checkNetworkVmuConnection();
-}
 
 static std::string game_data;
 static char g_base_name[128];
@@ -404,11 +389,6 @@ void retro_deinit()
     }
     
 	shutdownNetworkVmu();
-
-    // Cleanup network VMU client using std::unique_ptr semantics
-    if (g_vmu_network_client) {
-        g_vmu_network_client.reset();  // Use reset() instead of delete
-    }
     
     os_UninstallFaultHandler();
 	
@@ -976,8 +956,7 @@ static void update_variables(bool first_startup)
 	key[0] = '\0';
 
 	var.key = CORE_OPTION_NAME "_vmu_network";
-    bool prev_network_vmu_enabled = network_vmu_enabled;
-    network_vmu_enabled = false;
+    bool network_vmu_enabled = false;
     
     if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
         network_vmu_enabled = (strcmp(var.value, "enabled") == 0);
@@ -986,22 +965,16 @@ static void update_variables(bool first_startup)
     // Update the vmu_network system with the current setting
 	updateNetworkVmuEnabled(network_vmu_enabled);
 	
-    // If network VMU setting changed, reinitialize
-    if (first_startup || (network_vmu_enabled != prev_network_vmu_enabled)) {
+    // The vmu_network.cpp functions will handle state management
+    if (first_startup) {
         if (network_vmu_enabled) {
-            // Reset connection state to allow retry
-            network_vmu_connection_attempted = false;
             attemptNetworkVmuConnection();
-        } else {
-            // Disable network VMU
-            shutdownNetworkVmu();
-            network_vmu_connection_attempted = false;
         }
-        
-        // Trigger device refresh to reassign VMUs
-        if (settings.platform.isConsole()) {
-            devices_need_refresh = true;
-        }
+    }
+
+    // Trigger device refresh to reassign VMUs
+    if (settings.platform.isConsole()) {
+        devices_need_refresh = true;
     }
 
 	var.key = key ;
@@ -1231,9 +1204,7 @@ void retro_run()
 	if (devices_need_refresh)
 		refresh_devices(false);
 
-	if (network_vmu_enabled) {
-        checkNetworkVmuConnection();
-    }
+        checkNetworkVmuConnection(); // Always call - function handles enabled check
 
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
 	if (isOpenGL(config::RendererType))
@@ -2340,9 +2311,9 @@ bool retro_load_game(const struct retro_game_info *game)
 	haveCardReader = card_reader::readerAvailable();
 	refresh_devices(true);
 
-	if (settings.platform.isConsole() && network_vmu_enabled) {
-        attemptNetworkVmuConnection();
-    }
+if (settings.platform.isConsole()) {
+    attemptNetworkVmuConnection();  // Function handles enabled check internally
+}
 
 	// System may have changed - have to update hidden core options
 	set_variable_visibility();
