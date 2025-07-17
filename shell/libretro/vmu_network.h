@@ -33,7 +33,10 @@
 #endif
 
 #include <string>
+#include <memory>
 #include "types.h"  // For u8, u32 types
+
+typedef bool (*retro_environment_t)(unsigned cmd, void *data);
 
 // include of canonical MapleMsg from "../../core/sdl/dreamlink.h" could cause circular dependency issues
 struct MapleMsg {
