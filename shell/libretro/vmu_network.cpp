@@ -1,17 +1,271 @@
 #include "vmu_network.h"
+#include <chrono>
 #include <sstream>
 #include <iomanip>
 #include <libretro.h>
+#ifndef _WIN32
+    #include <fcntl.h>  // For fcntl() in setSocketNonBlocking()
+#endif
 
+void VmuNetworkClient::setSocketNonBlocking() { // Set the socket to non-blocking mode
+    if (socket_fd < 0) return;  // Ensure socket is valid
 
-std::unique_ptr<VmuNetworkClient> g_vmu_network_client = nullptr;
+    // Use platform-specific methods to set non-blocking mode
+#ifdef _WIN32
+    u_long mode = 1;
+    ioctlsocket(socket_fd, FIONBIO, &mode);
+#else
+    int flags = fcntl(socket_fd, F_GETFL, 0);
+    fcntl(socket_fd, F_SETFL, flags | O_NONBLOCK);
+#endif
+}
 
-static bool network_vmu_enabled = false;
-static bool network_vmu_connected = false;
-static bool network_vmu_connection_attempted = false;
-static retro_environment_t environ_cb = nullptr;
+// Enhanced VmuNetworkClient with better disconnect detection
+bool VmuNetworkClient::isConnected() const {
+    if (!connected) return false;
+    
+    // Test socket health with non-blocking peek
+    char test_byte;
+    
+#ifdef _WIN32
+    // On Windows, use standard recv with MSG_PEEK (socket should already be non-blocking)
+    int result = recv(socket_fd, &test_byte, 1, MSG_PEEK);
+#else
+    // On Unix systems, use MSG_DONTWAIT for non-blocking peek
+    int result = recv(socket_fd, &test_byte, 1, MSG_PEEK | MSG_DONTWAIT);
+#endif
+    
+    if (result == 0) {
+        // Connection closed by peer
+        connected = false;
+        return false;
+    } else if (result == SOCKET_ERROR) {
+#ifdef _WIN32
+        int error = WSAGetLastError();
+        if (error != WSAEWOULDBLOCK) {
+            connected = false;
+            return false;
+        }
+#else
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            connected = false;
+            return false;
+        }
+#endif
+    }
+    
+    return true;
+}
 
-VmuNetworkClient::VmuNetworkClient() {
+// Enhanced error handling in communication methods
+bool VmuNetworkClient::sendRawMessage(const std::string& message) {
+    if (!connected) return false;
+    
+    int result = send(socket_fd, message.c_str(), message.length(), 0);
+    if (result == SOCKET_ERROR) {
+        connected = false;  // Mark as disconnected on error
+        return false;
+    }
+    return true;
+}
+
+bool VmuNetworkClient::receiveRawMessage(std::string& response) {
+    if (!connected) return false;
+    
+    setSocketNonBlocking();
+
+    response.clear();
+    char ch;
+    while (true) {
+        int result = recv(socket_fd, &ch, 1, 0);
+        
+        if (result <= 0) {
+#ifdef _WIN32
+            if (result == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK) {
+                return false;  // No data available, try again later
+            }
+#else
+            if (result == SOCKET_ERROR && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                return false;  // No data available, try again later
+            }
+#endif
+            connected = false;  // Real error or connection closed
+            return false;
+        }
+        
+        response += ch;
+        if (response.length() >= 2 && 
+            response.substr(response.length() - 2) == "\r\n") {
+            response.erase(response.length() - 2);
+            break;
+        }
+        
+        if (response.length() > 4096) {
+            connected = false;
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+// NetworkVmuManager Implementation
+NetworkVmuManager::NetworkVmuManager(retro_environment_t env_cb) 
+    : environ_cb(env_cb) {
+    enterState(NetworkVmuState::DISABLED);
+}
+
+void NetworkVmuManager::enterState(NetworkVmuState new_state) {
+    current_state = new_state;
+    state_entered_time = std::chrono::steady_clock::now();
+}
+
+int NetworkVmuManager::getTimeInCurrentState() const {
+    auto now = std::chrono::steady_clock::now();
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        now - state_entered_time).count();
+}
+
+bool NetworkVmuManager::shouldCheckHealth() const {
+    auto now = std::chrono::steady_clock::now();
+    auto time_since_check = std::chrono::duration_cast<std::chrono::seconds>(
+        now - last_health_check).count();
+    return time_since_check >= HEALTH_CHECK_INTERVAL_SECONDS;
+}
+
+bool NetworkVmuManager::isConnectionHealthy() {
+    last_health_check = std::chrono::steady_clock::now();
+    return client && client->isConnected();
+}
+
+bool NetworkVmuManager::attemptConnection() {
+    if (!client) {
+        client = std::make_unique<VmuNetworkClient>();
+    }
+    
+    return client->connect();
+}
+
+void NetworkVmuManager::showConnectionMessage(const char* message, int duration) {
+    if (environ_cb) {
+        struct retro_message msg = {message, duration};
+        environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+    }
+}
+
+void NetworkVmuManager::setEnabled(bool enable) {
+    enabled = enable;
+    if (!enabled && current_state != NetworkVmuState::DISABLED) {
+        if (client) {
+            client->disconnect();
+            client.reset();
+        }
+        enterState(NetworkVmuState::DISABLED);
+    } else if (enabled && current_state == NetworkVmuState::DISABLED) {
+        enterState(NetworkVmuState::DISCONNECTED);
+    }
+}
+
+bool NetworkVmuManager::isConnected() const {
+    return current_state == NetworkVmuState::CONNECTED;
+}
+
+void NetworkVmuManager::update() {
+    switch (current_state) {
+        case NetworkVmuState::DISABLED:
+            if (enabled) {
+                enterState(NetworkVmuState::DISCONNECTED);
+            }
+            break;
+            
+        case NetworkVmuState::DISCONNECTED:
+            if (!enabled) {
+                enterState(NetworkVmuState::DISABLED);
+            } else {
+                enterState(NetworkVmuState::CONNECTING);
+            }
+            break;
+            
+        case NetworkVmuState::CONNECTING:
+            if (!enabled) {
+                enterState(NetworkVmuState::DISABLED);
+            } else if (attemptConnection()) {
+                enterState(NetworkVmuState::CONNECTED);
+                backoff_seconds = 1; // Reset backoff on success
+                showConnectionMessage("Network VMU A1 connected to DreamPotato", 180);
+            } else {
+                enterState(NetworkVmuState::RECONNECTING);
+            }
+            break;
+            
+        case NetworkVmuState::CONNECTED:
+            if (!enabled) {
+                if (client) {
+                    client->disconnect();
+                    client.reset();
+                }
+                enterState(NetworkVmuState::DISABLED);
+            } else if (shouldCheckHealth() && !isConnectionHealthy()) {
+                showConnectionMessage("Network VMU A1 disconnected from DreamPotato", 120);
+                enterState(NetworkVmuState::RECONNECTING);
+            }
+            break;
+            
+        case NetworkVmuState::RECONNECTING:
+            if (!enabled) {
+                enterState(NetworkVmuState::DISABLED);
+            } else if (getTimeInCurrentState() >= backoff_seconds) {
+                if (attemptConnection()) {
+                    enterState(NetworkVmuState::CONNECTED);
+                    backoff_seconds = 1; // Reset backoff
+                    showConnectionMessage("Network VMU A1 reconnected to DreamPotato", 120);
+                } else {
+                    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s (max)
+                    backoff_seconds = std::min(backoff_seconds * 2, MAX_BACKOFF_SECONDS);
+                    enterState(NetworkVmuState::RECONNECTING); // Reset timer
+                }
+            }
+            break;
+    }
+}
+
+// Global manager instance
+static std::unique_ptr<NetworkVmuManager> g_network_vmu_manager;
+
+// Updated wrapper functions to maintain API compatibility
+void initNetworkVmuSystem(retro_environment_t env_cb) {
+    g_network_vmu_manager = std::make_unique<NetworkVmuManager>(env_cb);
+}
+
+void updateNetworkVmuEnabled(bool enabled) {
+    if (g_network_vmu_manager) {
+        g_network_vmu_manager->setEnabled(enabled);
+    }
+}
+
+bool attemptNetworkVmuConnection() {
+    return g_network_vmu_manager ? g_network_vmu_manager->isConnected() : false;
+}
+
+void checkNetworkVmuConnection() {
+    if (g_network_vmu_manager) {
+        g_network_vmu_manager->update(); // All logic happens here
+    }
+}
+
+void shutdownNetworkVmu() {
+    g_network_vmu_manager.reset();
+}
+
+// Update global client access for maple integration
+std::unique_ptr<VmuNetworkClient> g_vmu_network_client = nullptr; // Keep for compatibility
+
+// Add compatibility function for maple_devs.cpp
+VmuNetworkClient* getNetworkVmuClient() {
+    return g_network_vmu_manager ? g_network_vmu_manager->getClient() : nullptr;
+}
+
+VmuNetworkClient::VmuNetworkClient() : socket_fd(INVALID_SOCKET), connected(false) {
 #ifdef _WIN32
     WSADATA wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
@@ -31,30 +285,23 @@ bool VmuNetworkClient::connect() {
     socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd == INVALID_SOCKET) return false;
     
-    // Set socket timeouts
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(DEFAULT_PORT);
+    
 #ifdef _WIN32
-    DWORD timeout_ms = 2000;
-    setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
-    setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
+    addr.sin_addr.s_addr = inet_addr(DEFAULT_HOST);
 #else
-    struct timeval timeout;
-    timeout.tv_sec = 2;  // 2 second timeout
-    timeout.tv_usec = 0;
-    setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
-    setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout, sizeof(timeout));
+    inet_pton(AF_INET, DEFAULT_HOST, &addr.sin_addr);
 #endif
     
-    struct sockaddr_in server_addr;
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(DEFAULT_PORT);
-    inet_pton(AF_INET, DEFAULT_HOST, &server_addr.sin_addr);
-    
-    if (::connect(socket_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
+    if (::connect(socket_fd, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
         closesocket(socket_fd);
         socket_fd = INVALID_SOCKET;
         return false;
     }
     
+    setSocketNonBlocking();
     connected = true;
     return true;
 }
@@ -67,157 +314,32 @@ void VmuNetworkClient::disconnect() {
     connected = false;
 }
 
-bool VmuNetworkClient::sendRawMessage(const std::string& message) {
-    if (!connected) return false;
-    
-    int result = send(socket_fd, message.c_str(), message.length(), 0);
-    return result != SOCKET_ERROR;
-}
-
-bool VmuNetworkClient::receiveRawMessage(std::string& response) {
-    if (!connected) return false;
-    
-    // DreamPotato uses line-based protocol (\r\n terminated)
-    response.clear();
-    char ch;
-    while (true) {
-        int result = recv(socket_fd, &ch, 1, 0);
-        if (result <= 0) return false;
-        
-        response += ch;
-        if (response.length() >= 2 && 
-            response.substr(response.length() - 2) == "\r\n") {
-            response.erase(response.length() - 2); // Remove \r\n
-            break;
-        }
-        
-        // Prevent infinite loops on malformed messages
-        if (response.length() > 4096) return false;
-    }
-    
-    return true;
-}
-
 bool VmuNetworkClient::sendMapleMessage(const MapleMsg& msg) {
     if (!connected) return false;
-    
-    // Format exactly like the SDL implementation
-    std::ostringstream s;
-    s.fill('0');
-    s << std::hex << std::uppercase
-        << std::setw(2) << (u32)msg.command << " "
-        << std::setw(2) << (u32)msg.destAP << " "
-        << std::setw(2) << (u32)msg.originAP << " "
-        << std::setw(2) << (u32)msg.size;
-    
-    const u32 sz = msg.getDataSize();
-    for (u32 i = 0; i < sz; i++)
-        s << " " << std::setw(2) << (u32)msg.data[i];
-    s << "\r\n";
-    
-    return sendRawMessage(s.str());
+
+    // Encode MapleMsg as ASCII hex (DreamPotato expects this)
+    std::ostringstream oss;
+    for (size_t i = 0; i < 4 + msg.getDataSize(); ++i) {
+        oss << std::hex << std::setw(2) << std::setfill('0')
+            << (int)((const u8*)&msg)[i];
+        if (i < 4 + msg.getDataSize() - 1)
+            oss << " ";
+    }
+    oss << "\r\n";
+    return sendRawMessage(oss.str());
 }
+
 bool VmuNetworkClient::receiveMapleMessage(MapleMsg& msg) {
     if (!connected) return false;
-    
     std::string response;
     if (!receiveRawMessage(response)) return false;
-    
-    // Parse hex-encoded maple message
-    if (sscanf(response.c_str(), "%hhx %hhx %hhx %hhx", 
-               &msg.command, &msg.destAP, &msg.originAP, &msg.size) != 4)
-        return false;
-    
-    // Ensure we have enough data for the message
-    if ((msg.getDataSize() - 1) * 3 + 13 >= response.length())
-        return false;
-    
-    // Parse data bytes
-    for (unsigned i = 0; i < msg.getDataSize(); i++) {
-        if (sscanf(&response[i * 3 + 12], "%hhx", &msg.data[i]) != 1)
-            return false;
+
+    // Decode ASCII hex back to MapleMsg
+    std::istringstream iss(response);
+    for (size_t i = 0; i < 4 + sizeof(msg.data); ++i) {
+        std::string byteStr;
+        if (!(iss >> byteStr)) break;
+        ((u8*)&msg)[i] = (u8)std::stoi(byteStr, nullptr, 16);
     }
-    
     return true;
-}
-
-void initNetworkVmuSystem(retro_environment_t env_cb) {
-    environ_cb = env_cb;
-}
-
-void updateNetworkVmuEnabled(bool enabled) {
-    network_vmu_enabled = enabled;
-}
-
-void initializeNetworkVmu() {
-    struct retro_variable var = {"flycast_vmu_network", NULL};
-    if (environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
-        if (strcmp(var.value, "enabled") == 0) {
-            // Create the global network client using std::unique_ptr
-            if (!g_vmu_network_client) {
-                g_vmu_network_client = std::make_unique<VmuNetworkClient>();
-                if (g_vmu_network_client->connect()) {
-                    network_vmu_connected = true;
-                    struct retro_message msg = {"Network VMU A1 connected to DreamPotato", 180};
-                    environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
-                } else {
-                    network_vmu_connected = false;
-                    struct retro_message msg = {"Network VMU failed to connect to DreamPotato", 180};
-                    environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
-                    g_vmu_network_client.reset();
-                }
-            }
-            network_vmu_connection_attempted = true;
-        }
-    }
-}
-
-void shutdownNetworkVmu() {
-    if (g_vmu_network_client) {
-        g_vmu_network_client.reset();
-        network_vmu_connected = false;
-    }
-}
-
-bool attemptNetworkVmuConnection() {
-    if (!network_vmu_enabled || network_vmu_connection_attempted) {
-        return network_vmu_connected;
-    }
-    
-    network_vmu_connection_attempted = true;
-    
-    if (!g_vmu_network_client) {
-        g_vmu_network_client = std::make_unique<VmuNetworkClient>();
-    }
-    
-    if (g_vmu_network_client->connect()) {
-        network_vmu_connected = true;
-        struct retro_message msg = {"Network VMU A1 connected to DreamPotato", 180};
-        environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
-    } else {
-        network_vmu_connected = false;
-        struct retro_message msg = {"Network VMU failed to connect to DreamPotato", 180};
-        environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
-    }
-    
-    return network_vmu_connected;
-}
-
-void checkNetworkVmuConnection() {
-    if (!network_vmu_enabled) {
-        return;
-    }
-    
-    if (!network_vmu_connected && !network_vmu_connection_attempted) {
-        attemptNetworkVmuConnection();
-    }
-    
-    // Check if connection is still alive
-    if (network_vmu_connected && g_vmu_network_client) {
-        if (!g_vmu_network_client->isConnected()) {
-            network_vmu_connected = false;
-            struct retro_message msg = {"Network VMU A1 disconnected from DreamPotato", 120};
-            environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
-        }
-    }
 }

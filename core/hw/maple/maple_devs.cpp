@@ -36,6 +36,8 @@ const char* maple_densha_controller_name    = "TAITO 001 Controller";
 
 const char* maple_sega_brand = "Produced By or Under License From SEGA ENTERPRISES,LTD.";
 
+extern VmuNetworkClient* getNetworkVmuClient();
+
 //fill in the info
 void maple_device::Setup(u32 bus, u32 port, int playerNum)
 {
@@ -461,27 +463,9 @@ u32 dma(u32 cmd) override
     // Network VMU hook - check if this is port A1 and network is enabled
     if (bus_id == 0 && bus_port == 0) {
 #ifdef LIBRETRO
-    // Initialize network client if needed
-    if (!g_vmu_network_client) {
-        extern retro_environment_t environ_cb;
-        if (environ_cb) {
-            struct retro_variable var = {"flycast_vmu_network", NULL};
-            if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
-                if (strcmp(var.value, "enabled") == 0) {
-                    g_vmu_network_client = std::make_unique<VmuNetworkClient>();
-                    if (g_vmu_network_client->connect()) {
-                        INFO_LOG(MAPLE, "Network VMU A1 connected to DreamPotato");
-                    } else {
-                        INFO_LOG(MAPLE, "Network VMU A1 failed to connect to DreamPotato");
-                        g_vmu_network_client.reset();  
-                    }
-                }
-            }
-        }
-    }
-
         // If we have a working network connection, send VMU operations to DreamPotato
-        if (g_vmu_network_client && g_vmu_network_client->isConnected()) {
+		VmuNetworkClient* network_client = getNetworkVmuClient();
+		if (network_client && network_client->isConnected()) {
             MapleMsg msg;
             msg.command = cmd & 0xFF;
             msg.destAP = 0x20; // Port A, Slot 1
@@ -491,9 +475,9 @@ u32 dma(u32 cmd) override
             if (dma_count_in <= 124) { // 31 words * 4 bytes
                 memcpy(msg.data, dma_buffer_in, dma_count_in);
 
-                if (g_vmu_network_client->sendMapleMessage(msg)) {
+                if (network_client->sendMapleMessage(msg)) {
                     MapleMsg response;
-					if (g_vmu_network_client->receiveMapleMessage(response)) {
+					if (network_client->receiveMapleMessage(response)) {
 						// Copy response back to DMA buffer
 						u32 responseBytes = response.size * 4u;
 						u32 copySize = std::min(responseBytes, 128u);
