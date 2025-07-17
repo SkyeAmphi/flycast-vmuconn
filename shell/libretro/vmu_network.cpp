@@ -32,15 +32,14 @@ bool VmuNetworkClient::connect() {
     if (socket_fd == INVALID_SOCKET) return false;
     
     // Set socket timeouts
-    struct timeval timeout;
-    timeout.tv_sec = 2;  // 2 second timeout
-    timeout.tv_usec = 0;
-    
 #ifdef _WIN32
     DWORD timeout_ms = 2000;
     setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
     setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
 #else
+    struct timeval timeout;
+    timeout.tv_sec = 2;  // 2 second timeout
+    timeout.tv_usec = 0;
     setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
     setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout, sizeof(timeout));
 #endif
