@@ -20,14 +20,6 @@
 
 #include <cstring>
 
-class BaseOption {
-public:
-    virtual ~BaseOption() = default;
-    virtual void reset() = 0;
-    virtual void load() = 0;
-    virtual void save() const = 0;
-};
-
 class Settings {
 public:
 	void reset() {}
