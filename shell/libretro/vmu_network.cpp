@@ -23,10 +23,10 @@ void VmuNetworkClient::setSocketNonBlocking() { // Set the socket to non-blockin
 // Enhanced VmuNetworkClient with better disconnect detection
 bool VmuNetworkClient::isConnected() const {
     if (!connected) return false;
-    
+
     // Test socket health with non-blocking peek
     char test_byte;
-    
+
 #ifdef _WIN32
     // On Windows, use standard recv with MSG_PEEK (socket should already be non-blocking)
     int result = recv(socket_fd, &test_byte, 1, MSG_PEEK);
@@ -34,7 +34,7 @@ bool VmuNetworkClient::isConnected() const {
     // On Unix systems, use MSG_DONTWAIT for non-blocking peek
     int result = recv(socket_fd, &test_byte, 1, MSG_PEEK | MSG_DONTWAIT);
 #endif
-    
+
     if (result == 0) {
         // Connection closed by peer
         connected = false;
@@ -53,60 +53,108 @@ bool VmuNetworkClient::isConnected() const {
         }
 #endif
     }
-    
+
     return true;
 }
 
 // Enhanced error handling in communication methods
 bool VmuNetworkClient::sendRawMessage(const std::string& message) {
     if (!connected) return false;
-    
-    int result = send(socket_fd, message.c_str(), message.length(), 0);
-    if (result == SOCKET_ERROR) {
-        connected = false;  // Mark as disconnected on error
-        return false;
+
+    setSocketNonBlocking();
+
+    size_t total_sent = 0;
+    auto start_time = std::chrono::steady_clock::now();
+    constexpr auto TIMEOUT_MS = std::chrono::milliseconds(5); // 5 ms timeout
+
+    while (total_sent < message.length()) {
+        int result = send(socket_fd, message.c_str() + total_sent, 
+                         message.length() - total_sent, 0);
+
+        if (result > 0) {
+            total_sent += result;
+            continue;
+        }
+
+        if (result == 0) {
+            connected = false;
+            return false;
+        }
+
+#ifdef _WIN32
+        int error = WSAGetLastError();
+        if (error != WSAEWOULDBLOCK) {
+            connected = false;
+            return false;
+        }
+#else
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            connected = false;
+            return false;
+        }
+#endif
+
+        auto now = std::chrono::steady_clock::now();
+        if (now - start_time > TIMEOUT_MS) {
+            return false; // Quick timeout
+        }
+        // Immediate retry for best responsiveness
     }
     return true;
 }
 
 bool VmuNetworkClient::receiveRawMessage(std::string& response) {
     if (!connected) return false;
-    
-    setSocketNonBlocking();
 
+    setSocketNonBlocking();
     response.clear();
+
+    auto start_time = std::chrono::steady_clock::now();
+    constexpr auto TIMEOUT_MS = std::chrono::milliseconds(5); // 5 ms timeout
+
     char ch;
     while (true) {
         int result = recv(socket_fd, &ch, 1, 0);
-        
-        if (result <= 0) {
-#ifdef _WIN32
-            if (result == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK) {
-                return false;  // No data available, try again later
+
+        if (result > 0) {
+            response += ch;
+            if (response.length() >= 2 && 
+                response.substr(response.length() - 2) == "\r\n") {
+                response.erase(response.length() - 2);
+                return true;
             }
-#else
-            if (result == SOCKET_ERROR && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                return false;  // No data available, try again later
+
+            if (response.length() > 1024) { // Smaller buffer for faster failure detection
+                connected = false;
+                return false;
             }
-#endif
-            connected = false;  // Real error or connection closed
-            return false;
+            continue; // Reset timeout on successful data
         }
-        
-        response += ch;
-        if (response.length() >= 2 && 
-            response.substr(response.length() - 2) == "\r\n") {
-            response.erase(response.length() - 2);
-            break;
-        }
-        
-        if (response.length() > 4096) {
+
+        if (result == 0) {
             connected = false;
             return false;
         }
+
+#ifdef _WIN32
+        int error = WSAGetLastError();
+        if (error != WSAEWOULDBLOCK) {
+            connected = false;
+            return false;
+        }
+#else
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            connected = false;
+            return false;
+        }
+#endif
+
+        auto now = std::chrono::steady_clock::now();
+        if (now - start_time > TIMEOUT_MS) {
+            return false; // Quick fallback to file VMU
+        }
+        // Immediate retry
     }
-    
-    return true;
 }
 
 // NetworkVmuManager Implementation
@@ -315,6 +363,7 @@ void VmuNetworkClient::disconnect() {
 }
 
 bool VmuNetworkClient::sendMapleMessage(const MapleMsg& msg) {
+    std::lock_guard<std::mutex> lock(client_mutex);
     if (!connected) return false;
 
     // Encode MapleMsg as ASCII hex (DreamPotato expects this)
@@ -330,6 +379,7 @@ bool VmuNetworkClient::sendMapleMessage(const MapleMsg& msg) {
 }
 
 bool VmuNetworkClient::receiveMapleMessage(MapleMsg& msg) {
+    std::lock_guard<std::mutex> lock(client_mutex);
     if (!connected) return false;
     std::string response;
     if (!receiveRawMessage(response)) return false;

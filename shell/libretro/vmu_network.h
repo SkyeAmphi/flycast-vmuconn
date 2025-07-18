@@ -31,7 +31,7 @@
 
 #include <string>
 #include <memory>
-#include <chrono>  // Add this for NetworkVmuManager
+#include <chrono>
 #include "types.h"  // For u8, u32 types
 #include <mutex>
 
@@ -67,7 +67,7 @@ public:
     
     bool connect();
     void disconnect();
-    bool isConnected() const;  // Remove inline implementation for better error handling
+    bool isConnected() const;
     
     bool sendMapleMessage(const MapleMsg& msg);
     bool receiveMapleMessage(MapleMsg& msg);
