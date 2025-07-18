@@ -384,9 +384,7 @@ void retro_deinit()
 
     //When auto-save states are enabled this is needed to prevent the core from shutting down before
     //any save state actions are still running - which results in partial saves
-    {
-        std::lock_guard<std::mutex> lock(mtx_serialization);
-    }
+    std::lock_guard<std::mutex> lock(mtx_serialization);
     
 	shutdownNetworkVmu();
     

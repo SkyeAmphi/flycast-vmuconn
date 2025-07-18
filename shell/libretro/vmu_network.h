@@ -33,6 +33,7 @@
 #include <memory>
 #include <chrono>  // Add this for NetworkVmuManager
 #include "types.h"  // For u8, u32 types
+#include <mutex>
 
 typedef bool (*retro_environment_t)(unsigned cmd, void *data);
 
@@ -42,7 +43,7 @@ struct MapleMsg {
     u8 originAP = 0;
     u8 size = 0;
     u8 data[1024];
-    
+
     u32 getDataSize() const { return size * 4; }
 };
 
@@ -56,6 +57,7 @@ private:
     
     SOCKET socket_fd = INVALID_SOCKET;
     mutable bool connected = false;  // mutable for isConnected() const
+    mutable std::mutex client_mutex; // Add mutex for thread safety
 
         void setSocketNonBlocking(); // we dont want to block the main thread
     
