@@ -105,7 +105,7 @@ private:
     bool shouldCheckHealth() const;
     bool isConnectionHealthy();
     bool attemptConnection();
-    void showConnectionMessage(const char* message, int duration);
+    void showConnectionMessage(const char* message, unsigned int duration);
     
 public:
     NetworkVmuManager(retro_environment_t env_cb);

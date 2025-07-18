@@ -194,7 +194,7 @@ bool NetworkVmuManager::attemptConnection() {
     return client->connect();
 }
 
-void NetworkVmuManager::showConnectionMessage(const char* message, int duration) {
+void NetworkVmuManager::showConnectionMessage(const char* message, unsigned int duration) {
     if (environ_cb) {
         struct retro_message msg = {message, duration};
         environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
