@@ -305,10 +305,6 @@ void updateNetworkVmuEnabled(bool enabled) {
     }
 }
 
-bool attemptNetworkVmuConnection() {
-    return g_network_vmu_manager ? g_network_vmu_manager->isConnected() : false;
-}
-
 void checkNetworkVmuConnection() {
     if (g_network_vmu_manager) {
         g_network_vmu_manager->update(); // All logic happens here

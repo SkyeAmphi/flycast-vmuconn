@@ -130,7 +130,6 @@ void updateNetworkVmuEnabled(bool enabled);
 void shutdownNetworkVmu();
 
 // Legacy compatibility functions (for existing libretro.cpp integration)
-bool attemptNetworkVmuConnection();
 void checkNetworkVmuConnection();
 
 // For maple integration (replaces global g_vmu_network_client)

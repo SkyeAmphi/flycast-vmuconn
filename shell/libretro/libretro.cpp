@@ -109,8 +109,6 @@ extern void retro_audio_deinit(void);
 extern void retro_audio_flush_buffer(void);
 extern void retro_audio_upload(void);
 
-extern std::unique_ptr<VmuNetworkClient> g_vmu_network_client;
-
 std::string arcadeFlashPath;
 static bool boot_to_bios;
 
@@ -962,13 +960,6 @@ static void update_variables(bool first_startup)
 
     // Update the vmu_network system with the current setting
 	updateNetworkVmuEnabled(network_vmu_enabled);
-	
-    // The vmu_network.cpp functions will handle state management
-    if (first_startup) {
-        if (network_vmu_enabled) {
-            attemptNetworkVmuConnection();
-        }
-    }
 
     // Trigger device refresh to reassign VMUs
     if (settings.platform.isConsole()) {
@@ -2308,10 +2299,6 @@ bool retro_load_game(const struct retro_game_info *game)
 
 	haveCardReader = card_reader::readerAvailable();
 	refresh_devices(true);
-
-if (settings.platform.isConsole()) {
-    attemptNetworkVmuConnection();  // Function handles enabled check internally
-}
 
 	// System may have changed - have to update hidden core options
 	set_variable_visibility();
