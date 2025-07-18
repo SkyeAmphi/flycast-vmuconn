@@ -380,14 +380,21 @@ bool VmuNetworkClient::sendMapleMessage(const MapleMsg& msg) {
     std::lock_guard<std::mutex> lock(client_mutex);
     if (!connected) return false;
 
-    // Encode MapleMsg as ASCII hex (DreamPotato expects this)
+    // Single-stream hex formatting
     std::ostringstream oss;
-    for (size_t i = 0; i < 4 + msg.getDataSize(); ++i) {
-        oss << std::hex << std::setw(2) << std::setfill('0')
-            << (int)((const u8*)&msg)[i];
-        if (i < 4 + msg.getDataSize() - 1)
-            oss << " ";
+    oss << std::hex << std::setfill('0');
+
+    // Header
+    oss << std::setw(2) << (int)msg.command << " "
+        << std::setw(2) << (int)msg.destAP << " "
+        << std::setw(2) << (int)msg.originAP << " "
+        << std::setw(2) << (int)msg.size;
+
+    // Data bytes
+    for (u32 i = 0; i < msg.getDataSize(); ++i) {
+        oss << " " << std::setw(2) << (int)msg.data[i];
     }
+
     oss << "\r\n";
     return sendRawMessage(oss.str());
 }
@@ -398,18 +405,21 @@ bool VmuNetworkClient::receiveMapleMessage(MapleMsg& msg) {
     std::string response;
     if (!receiveRawMessage(response)) return false;
 
+    // Clear message first for safety
+    memset(&msg, 0, sizeof(msg));
+
     // Decode ASCII hex back to MapleMsg
     std::istringstream iss(response);
-    for (size_t i = 0; i < 4 + sizeof(msg.data); ++i) {
+    for (size_t i = 0; i < sizeof(MapleMsg); ++i) {
         std::string byteStr;
         if (!(iss >> byteStr)) break;
         ((u8*)&msg)[i] = (u8)std::stoi(byteStr, nullptr, 16);
     }
-    
+
     // Log successful save write confirmations
     if (msg.command == 0x07) { // MDRS_DeviceReply indicates success
         INFO_LOG(MAPLE, "💾 Network VMU: Save data updated via DreamPotato");
     }
-    
+
     return true;
 }
