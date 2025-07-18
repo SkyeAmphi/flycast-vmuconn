@@ -195,9 +195,23 @@ bool NetworkVmuManager::attemptConnection() {
 }
 
 void NetworkVmuManager::showConnectionMessage(const char* message, unsigned int duration) {
-    if (environ_cb) {
-        struct retro_message msg = {message, duration};
-        environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+    // Categorize messages by importance
+    bool is_connection_established = strstr(message, "connected") != nullptr && strstr(message, "disconnected") == nullptr;
+    bool is_disconnection = strstr(message, "disconnected") != nullptr;
+    bool is_reconnection = strstr(message, "reconnected") != nullptr;
+    
+    // Always log significant state changes
+    if (is_connection_established || is_disconnection || is_reconnection) {
+        INFO_LOG(MAPLE, "🔗 Network VMU: %s", message);
+        
+        // Show user message for initial connection and disconnection only
+        if (environ_cb && (is_connection_established || is_disconnection)) {
+            struct retro_message msg = {message, duration};
+            environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+        }
+    } else {
+        // Less important messages - debug level only
+        DEBUG_LOG(MAPLE, "Network VMU: %s", message);
     }
 }
 
@@ -391,5 +405,11 @@ bool VmuNetworkClient::receiveMapleMessage(MapleMsg& msg) {
         if (!(iss >> byteStr)) break;
         ((u8*)&msg)[i] = (u8)std::stoi(byteStr, nullptr, 16);
     }
+    
+    // Log successful save write confirmations
+    if (msg.command == 0x07) { // MDRS_DeviceReply indicates success
+        INFO_LOG(MAPLE, "💾 Network VMU: Save data updated via DreamPotato");
+    }
+    
     return true;
 }
