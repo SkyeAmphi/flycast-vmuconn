@@ -268,7 +268,7 @@ void DreamLinkGamepad::resetMappingToDefault(bool arcade, bool gamepad) {
 		if (dreamlink) {
 	        dreamlink->setDefaultMapping(input_mapper);
 		}
-		setBaseDefaultMapping(input_mapper); // TODO check if this is needed
+		// setBaseDefaultMapping(input_mapper); // TODO check if this is needed
     }
 }
 
@@ -298,7 +298,7 @@ std::shared_ptr<InputMapping> DreamLinkGamepad::getDefaultMapping() {
 		if (dreamlink) {
 	        dreamlink->setDefaultMapping(mapping);
 		}
-		setBaseDefaultMapping(mapping); // TODO check if this is needed
+		// setBaseDefaultMapping(mapping); // TODO check if this is needed
     }
     return mapping;
 }
@@ -322,7 +322,6 @@ void DreamLinkGamepad::setBaseDefaultMapping(const std::shared_ptr<InputMapping>
 		});
 	}
 }
-#endif
 
 void DreamLinkGamepad::checkKeyCombo() {
     if (ltrigPressed && rtrigPressed && startPressed)
@@ -395,7 +394,7 @@ std::shared_ptr<DreamLink> SDLDreamLinkManager::createDreamLink(const std::strin
     return nullptr;
 }
 
-#else // USE_DREAMCASTCONTROLLER not defined
+#else // LIBRETRO defined ?
 
 // Stub implementations for builds without DreamLink support
 class DreamLinkGamepad : public SDLGamepad {
@@ -413,9 +412,9 @@ public:
     std::shared_ptr<InputMapping> getDefaultMapping() override { return SDLGamepad::getDefaultMapping(); }
 };
 
-#endif // USE_DREAMCASTCONTROLLER
+#endif // LIBRETRO ?
 
-#endif // !LIBRETRO
+#endif // USE_DREAMCASTCONTROLLER
 
 // LIBRETRO IMPLEMENTATIONS
 #if defined(LIBRETRO)
