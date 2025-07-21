@@ -18,8 +18,8 @@
  */
 #include "dreamconn.h"
 
-#ifdef USE_DREAMCASTCONTROLLER
 #include "hw/maple/maple_devs.h"
+#include "hw/maple/maple_if.h"
 #include "ui/gui.h"
 #include <cfg/option.h>
 #include <SDL.h>
@@ -35,7 +35,6 @@
 #include <windows.h>
 #include <setupapi.h>
 #endif
-#include <hw/maple/maple_if.h>
 
 
 static asio::error_code sendMsg(const MapleMsg& msg, asio::ip::tcp::iostream& stream)
@@ -218,18 +217,9 @@ void DreamConn::connect() {
 
 	iostream.expires_from_now(std::chrono::duration<u32>::max());	// don't use a 64-bit based duration to avoid overflow
 
-	// TODO: unsure whether to adjust or to delete this condition. We need to stay connected to be notified if a peripheral gets plugged back in later on
-	if (true || (hasVmu() || hasRumble()))
-	{
-		NOTICE_LOG(INPUT, "Connected to DreamcastController[%d]: Type:%s, VMU:%d, Rumble Pack:%d", bus, getName().c_str(), hasVmu(), hasRumble());
-		maple_io_connected = true;
-	}
-	else
-	{
-		WARN_LOG(INPUT, "DreamcastController[%d] connection: no VMU or Rumble Pack connected", bus);
-		disconnect();
-		return;
-	}
+	// Remain connected even if no devices were found, so that plugging one in later will be detected
+	NOTICE_LOG(INPUT, "Connected to DreamcastController[%d]: Type:%s, VMU:%d, Rumble Pack:%d", bus, getName().c_str(), hasVmu(), hasRumble());
+	maple_io_connected = true;
 }
 
 void DreamConn::disconnect() {
@@ -240,5 +230,3 @@ void DreamConn::disconnect() {
 
 	NOTICE_LOG(INPUT, "Disconnected from DreamcastController[%d]", bus);
 }
-
-#endif

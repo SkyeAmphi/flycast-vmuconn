@@ -10,6 +10,8 @@
 
 #include <memory>
 #ifndef LIBRETRO
+// TODO: should we move these to maple folder?
+// Would help non-sdl builds
 #include <sdl/dreamlink.h>
 #include <sdl/dreamconn.h>
 #endif
@@ -408,7 +410,7 @@ static void maple_handle_reconnect()
         auto reconnectLink = getDreamLinkNeedsReconnect();
         if (reconnectLink)
         {
-            createDreamLinkDevices(reconnectLink, false);
+            createDreamLinkDevices(reconnectLink, false); // TODO might need extra false argument- check references
             clearDreamLinkNeedsReconnect();
         }
 #endif

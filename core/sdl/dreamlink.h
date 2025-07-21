@@ -18,8 +18,17 @@
  */
 #pragma once
 
+// This file contains abstraction layer for access to different kinds of remote peripherals.
+// This includes both real Dreamcast controllers, VMUs, rumble packs etc. but also emulated VMUs.
+
 #include "types.h"
 #include "emulator.h"
+
+#if (defined(_WIN32) || defined(__linux__) || (defined(__APPLE__) && defined(TARGET_OS_MAC))) && !defined(TARGET_UWP) && defined(USE_SDL)
+#define USE_DREAMCASTCONTROLLER 1
+#include "sdl_gamepad.h"
+#endif
+
 #include <functional>
 #include <memory>
 #include <array>
@@ -97,9 +106,11 @@ public:
 		return -1;
 	}
 
+#if defined(USE_SDL)
 	//! Allows a DreamLink device to dictate the default mapping
 	virtual void setDefaultMapping(const std::shared_ptr<InputMapping>& mapping) const {
 	}
+#endif
 
 	//! Allows button names to be defined by a DreamLink device
 	//! @param[in] code The button code to retrieve name of
@@ -196,6 +207,10 @@ public:
     virtual std::shared_ptr<DreamLink> createDreamLink(const std::string& type, const std::string& config = "") {
         return nullptr; // Base implementation returns null
     }
+
+    // protected: // TODO figure out what to do with these
+	// std::shared_ptr<InputMapping> getDefaultMapping() override;
+	// void setBaseDefaultMapping(const std::shared_ptr<InputMapping>& mapping) const;
 };
 
 // Global manager instance
