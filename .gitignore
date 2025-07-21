@@ -1,6 +1,7 @@
 build/
 artifact/
 build-gcc/
+build-libretro-release/
 
 # macOS
 .DS_Store
