@@ -411,7 +411,7 @@ bool VmuNetworkClient::receiveMapleMessage(MapleMsg& msg) {
     if (!receiveRawMessage(response)) return false;
 
     // Clear message first for safety
-    memset(&msg, 0, sizeof(msg));
+    msg = {};
 
     // Decode ASCII hex back to MapleMsg
     std::istringstream iss(response);
