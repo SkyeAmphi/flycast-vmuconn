@@ -3,6 +3,7 @@
 #include <sstream>
 #include <iomanip>
 #include <libretro.h>
+#include "hw/maple/maple_if.h" // For MDCF_* and MDRS_* constants
 #ifndef _WIN32
     #include <fcntl.h>  // For fcntl() in setSocketNonBlocking()
 #endif
@@ -98,7 +99,7 @@ bool VmuNetworkClient::sendRawMessage(const std::string& message) {
         if (now - start_time > TIMEOUT_MS) {
             return false; // Quick timeout
         }
-        // Immediate retry for best responsiveness
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
     return true;
 }
@@ -153,7 +154,7 @@ bool VmuNetworkClient::receiveRawMessage(std::string& response) {
         if (now - start_time > TIMEOUT_MS) {
             return false; // Quick fallback to file VMU
         }
-        // Immediate retry
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
 }
 
@@ -256,7 +257,11 @@ void NetworkVmuManager::update() {
                 backoff_seconds = 1; // Reset backoff on success
                 showConnectionMessage("Network VMU A1 connected to DreamPotato", 180);
             } else {
-                enterState(NetworkVmuState::RECONNECTING);
+                // Give it a few attempts before going to reconnecting
+                if (getTimeInCurrentState() >= 3) { // Try for 3 seconds
+                    enterState(NetworkVmuState::RECONNECTING);
+                }
+                // else: stay in CONNECTING and keep trying
             }
             break;
             
@@ -341,12 +346,16 @@ bool VmuNetworkClient::connect() {
     if (connected) return true;
     
     socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (socket_fd == INVALID_SOCKET) return false;
+    if (socket_fd == INVALID_SOCKET) {
+        ERROR_LOG(MAPLE, "VmuNetworkClient: Failed to create socket");
+        return false;
+    }
+    
+    setSocketNonBlocking();
     
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_port = htons(DEFAULT_PORT);
-    
 #ifdef _WIN32
     addr.sin_addr.s_addr = inet_addr(DEFAULT_HOST);
 #else

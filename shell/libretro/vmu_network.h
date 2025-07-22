@@ -93,7 +93,7 @@ private:
     
     int backoff_seconds = 1;
     static constexpr int MAX_BACKOFF_SECONDS = 30;
-    static constexpr int HEALTH_CHECK_INTERVAL_SECONDS = 5;
+    static constexpr int HEALTH_CHECK_INTERVAL_SECONDS = 30;
     
     bool enabled = false;
     retro_environment_t environ_cb = nullptr;
