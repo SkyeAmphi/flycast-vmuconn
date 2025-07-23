@@ -764,17 +764,21 @@ u32 dma(u32 cmd) override
 					case MFID_2_LCD:
 					{
 						DEBUG_LOG(MAPLE, "VMU %s LCD write (normal processing)", logical_port);
-						r32();				 // Skip PT, phase, block#
+						r32();	// Skip PT, phase, block#
 						rptr(lcd_data, 192); // Read 192 bytes of LCD data
 
 						// Convert to local display format
 						u8 white = 0xff, black = 0x00;
-						for (int y = 0; y < 32; ++y) {
-							u8 *dst = lcd_data_decoded + y * 48;
-							u8 *src = lcd_data + 6 * y + 5;
-							for (int x = 0; x < 6; ++x) {
+
+						for (int y = 0; y < 32; ++y) 
+						{
+							u8* dst = lcd_data_decoded + y * 48;
+							u8* src = lcd_data + 6 * y + 5;
+							for (int x = 0; x < 6; ++x) 
+							{
 								u8 col = *src--;
-								for (int l = 0; l < 8; l++) {
+								for (int l = 0; l < 8; l++) 
+								{
 									*dst++ = col & 1 ? black : white;
 									col >>= 1;
 								}
