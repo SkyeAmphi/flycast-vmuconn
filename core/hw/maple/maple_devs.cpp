@@ -479,21 +479,44 @@ u32 dma(u32 cmd) override
 
                 if (network_client->sendMapleMessage(msg)) {
                     MapleMsg response;
-					if (network_client->receiveMapleMessage(response)) {
-						// Copy response back to DMA buffer
-						u32 responseBytes = response.size * 4u;
-						u32 copySize = std::min(responseBytes, 128u);
+                    if (network_client->receiveMapleMessage(response)) {
+                        // Handle different types of network operations
+                        if (cmd == MDCF_BlockWrite && response.command == MDRS_DeviceReply) {
+                            u32 function = *(u32 *)&dma_buffer_in[4];
 
-						// Validation for network protocol safety
-						if (responseBytes > sizeof(response.data)) {
-							WARN_LOG(MAPLE, "Network VMU: Response size exceeds buffer capacity");
-							copySize = std::min(copySize, static_cast<u32>(sizeof(response.data)));
-						}
-						memcpy(dma_buffer_out, response.data, copySize);
-                        *dma_count_out = copySize;
-                        
-                        INFO_LOG(MAPLE, "Network VMU A1: Sent cmd %d to DreamPotato", cmd);
-                        return response.command;
+                            if (function == MFID_1_Storage) {
+                                // Storage operations - sync with DreamPotato's authoritative data
+                                u32 bph = *(u32 *)&dma_buffer_in[8];
+                                u32 Block = (SWAP32(bph)) & 0xffff;
+                                u32 Phase = ((SWAP32(bph)) >> 16) & 0xff;
+                                u32 write_adr = Block * 512 + Phase * (512 / 4);
+                                u32 write_len = dma_count_in - 12;
+
+                                if (write_adr + write_len <= sizeof(flash_data)) {
+                                    // Update local flash with the data that was sent to DreamPotato
+                                    memcpy(&flash_data[write_adr], &dma_buffer_in[12], write_len);
+
+                                    if (network_client->syncFlashBlock(Block, flash_data)) {
+                                        // Mark for file save and force immediate persistence
+                                        fullSaveNeeded = true;
+                                        if (file != nullptr) {
+                                            if (std::fseek(file, Block * 512, SEEK_SET) == 0) {
+                                                std::fwrite(&flash_data[Block * 512], 512, 1, file);
+                                                std::fflush(file);
+                                            }
+                                        }
+                                    }
+                                }
+                                // For storage, we handled it completely - skip normal processing
+                                network_handled = true;
+                                ERROR_LOG(MAPLE, "💾 Network VMU: Storage write synced with DreamPotato");
+                            }
+                            else if (function == MFID_2_LCD) {
+                                // For LCD, we sent it to DreamPotato but still want normal processing
+                                // to update flycast's local VMU screen
+                                ERROR_LOG(MAPLE, "📺 Network VMU: LCD graphics sent to DreamPotato - will also update local screen");
+                            }
+                        }
                     }
                 }
             }
