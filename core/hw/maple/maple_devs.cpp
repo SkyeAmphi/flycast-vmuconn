@@ -460,18 +460,20 @@ struct maple_sega_vmu: maple_base
 
 u32 dma(u32 cmd) override
 {
+    bool network_handled = false;
+
     // Network VMU hook - check if this is port A1 and network is enabled
     if (bus_id == 0 && bus_port == 0) {
 #ifdef LIBRETRO
         // If we have a working network connection, send VMU operations to DreamPotato
-		VmuNetworkClient* network_client = getNetworkVmuClient();
-		if (network_client && network_client->isConnected()) {
+        VmuNetworkClient* network_client = getNetworkVmuClient();
+        if (network_client && network_client->isConnected()) {
             MapleMsg msg;
             msg.command = cmd & 0xFF;
             msg.destAP = 0x20; // Port A, Slot 1
             msg.originAP = 0;
             msg.size = std::min(dma_count_in / 4, (u32)31); // Max 31 words
-            
+
             if (dma_count_in <= 124) { // 31 words * 4 bytes
                 memcpy(msg.data, dma_buffer_in, dma_count_in);
 
@@ -494,13 +496,16 @@ u32 dma(u32 cmd) override
                         return response.command;
                     }
                 }
-
-                INFO_LOG(MAPLE, "Network VMU A1: Network communication failed, using file VMU");
             }
         }
 #endif
     }
     
+    // Skip normal processing ONLY for storage writes that were handled by network
+    if (network_handled) {
+        return MDRS_DeviceReply;
+    }
+
     //printf("maple_sega_vmu::dma Called for port %d:%d, Command %d\n", bus_id, bus_port, cmd);
 		switch (cmd)
 		{
@@ -735,29 +740,25 @@ u32 dma(u32 cmd) override
 
 					case MFID_2_LCD:
 					{
-						DEBUG_LOG(MAPLE, "VMU %s LCD write", logical_port);
-						r32();	// PT, phase, block#
-						rptr(lcd_data,192);
+						DEBUG_LOG(MAPLE, "VMU %s LCD write (normal processing)", logical_port);
+						r32();				 // Skip PT, phase, block#
+						rptr(lcd_data, 192); // Read 192 bytes of LCD data
 
-						u8 white=0xff,black=0x00;
-
-						for(int y=0;y<32;++y)
-						{
-							u8* dst=lcd_data_decoded+y*48;
-							u8* src=lcd_data+6*y+5;
-							for(int x=0;x<6;++x)
-							{
-								u8 col=*src--;
-								for(int l=0;l<8;l++)
-								{
-									*dst++=col&1?black:white;
-									col>>=1;
+						// Convert to local display format
+						u8 white = 0xff, black = 0x00;
+						for (int y = 0; y < 32; ++y) {
+							u8 *dst = lcd_data_decoded + y * 48;
+							u8 *src = lcd_data + 6 * y + 5;
+							for (int x = 0; x < 6; ++x) {
+								u8 col = *src--;
+								for (int l = 0; l < 8; l++) {
+									*dst++ = col & 1 ? black : white;
+									col >>= 1;
 								}
 							}
 						}
 						config->SetImage(lcd_data_decoded);
-
-						return  MDRS_DeviceReply;
+						return MDRS_DeviceReply;
 					}
 
 					case MFID_3_Clock:
