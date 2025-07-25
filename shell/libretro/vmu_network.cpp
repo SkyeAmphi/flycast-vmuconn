@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <libretro.h>
 #include "hw/maple/maple_if.h" // For MDCF_* and MDRS_* constants
+#include "log/LogManager.h" // For INFO_LOG, WARN_LOG macros
 #ifndef _WIN32
     #include <fcntl.h>  // For fcntl() in setSocketNonBlocking()
 #endif
@@ -21,40 +22,64 @@ void VmuNetworkClient::setSocketNonBlocking() { // Set the socket to non-blockin
 #endif
 }
 
+bool VmuNetworkClient::performHandshake() {
+    MapleMsg handshake;
+    handshake.command = 0xFF;
+    handshake.destAP = 0x01;
+    handshake.originAP = 0x00;
+    handshake.size = 2;
+    const char* handshake_str = "DP_HANDSHAKE";
+    memcpy(handshake.data, handshake_str, std::min<size_t>(handshake.size * 4, strlen(handshake_str)));
+
+    if (!sendMapleMessage(handshake)) {
+        ERROR_LOG(MAPLE, "VmuNetworkClient: Failed to send handshake");
+        closesocket(socket_fd);
+        socket_fd = INVALID_SOCKET;
+        connected = false;
+        return false;
+    }
+
+    MapleMsg response;
+    if (!receiveMapleMessage(response) || response.command != 0xFE) {
+        ERROR_LOG(MAPLE, "VmuNetworkClient: Handshake ACK not received");
+        closesocket(socket_fd);
+        socket_fd = INVALID_SOCKET;
+        connected = false;
+        return false;
+    }
+
+    ERROR_LOG(MAPLE, "VmuNetworkClient: Handshake completed, connection established");
+    return true;
+}
+
 // Enhanced VmuNetworkClient with better disconnect detection
 bool VmuNetworkClient::isConnected() const {
     if (!connected) return false;
 
     // Test socket health with non-blocking peek
     char test_byte;
-
 #ifdef _WIN32
     // On Windows, use standard recv with MSG_PEEK (socket should already be non-blocking)
     int result = recv(socket_fd, &test_byte, 1, MSG_PEEK);
+    int error = WSAGetLastError();
+    if (result == 0) {
+        connected = false;
+        return false;
+    } else if (result == SOCKET_ERROR && error != WSAEWOULDBLOCK) {
+        connected = false;
+        return false;
+    }
 #else
     // On Unix systems, use MSG_DONTWAIT for non-blocking peek
     int result = recv(socket_fd, &test_byte, 1, MSG_PEEK | MSG_DONTWAIT);
-#endif
-
     if (result == 0) {
-        // Connection closed by peer
         connected = false;
         return false;
-    } else if (result == SOCKET_ERROR) {
-#ifdef _WIN32
-        int error = WSAGetLastError();
-        if (error != WSAEWOULDBLOCK) {
-            connected = false;
-            return false;
-        }
-#else
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            connected = false;
-            return false;
-        }
-#endif
+    } else if (result == SOCKET_ERROR && errno != EAGAIN && errno != EWOULDBLOCK) {
+        connected = false;
+        return false;
     }
-
+#endif
     return true;
 }
 
@@ -234,6 +259,17 @@ bool NetworkVmuManager::isConnected() const {
 }
 
 void NetworkVmuManager::update() {
+
+    static NetworkVmuState last_state = NetworkVmuState::DISABLED;
+    if (current_state != last_state) {
+        last_state = current_state;
+    }
+
+    static int update_count = 0;
+    if (++update_count % 300 == 0) {  // Every 5 seconds at 60fps
+                 update_count, (int)current_state, enabled ? "true" : "false");
+    }
+
     switch (current_state) {
         case NetworkVmuState::DISABLED:
             if (enabled) {
@@ -257,9 +293,13 @@ void NetworkVmuManager::update() {
                 backoff_seconds = 1; // Reset backoff on success
                 showConnectionMessage("Network VMU A1 connected to DreamPotato", 180);
             } else {
-                // Give it a few attempts before going to reconnecting
-                if (getTimeInCurrentState() >= 3) { // Try for 3 seconds
-                    enterState(NetworkVmuState::RECONNECTING);
+                // If stuck in CONNECTING for >10s, forcibly reset client
+                if (getTimeInCurrentState() > 10) {
+                    if (client) {
+                        client->disconnect();
+                        client.reset();
+                    }
+                    enterState(NetworkVmuState::DISCONNECTED);
                 }
                 // else: stay in CONNECTING and keep trying
             }
@@ -311,9 +351,9 @@ void updateNetworkVmuEnabled(bool enabled) {
 }
 
 void checkNetworkVmuConnection() {
-    if (g_network_vmu_manager) {
-        g_network_vmu_manager->update(); // All logic happens here
-    }
+    if (!g_network_vmu_manager || !g_network_vmu_manager->isEnabled())
+        return;
+    g_network_vmu_manager->update(); // All logic happens here
 }
 
 void shutdownNetworkVmu() {
@@ -343,8 +383,53 @@ VmuNetworkClient::~VmuNetworkClient() {
 }
 
 bool VmuNetworkClient::connect() {
-    if (connected) return true;
     
+    if (connected && isConnected()) return true; // Add isConnected() check
+
+    // Check existing socket completion
+    if (socket_fd != INVALID_SOCKET) {
+        fd_set write_set;
+        FD_ZERO(&write_set);
+        FD_SET(socket_fd, &write_set);
+        struct timeval timeout = {0, 0};
+        
+        int result = select(socket_fd + 1, nullptr, &write_set, nullptr, &timeout);
+        if (result > 0 && FD_ISSET(socket_fd, &write_set)) {
+            int error = 0;
+            socklen_t len = sizeof(error);
+            if (getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, (char *)&error, &len) == 0) {
+                if (performHandshake()) {
+                    connected = true;
+                    return true;
+                } else {
+                    return false;
+                }
+            }
+        } else if (result == 0) {
+            if (connect_start_time.time_since_epoch().count() > 0) {
+                auto now = std::chrono::steady_clock::now();
+                if (now - connect_start_time > std::chrono::seconds(5)) {
+                    closesocket(socket_fd);
+                    socket_fd = INVALID_SOCKET;
+                    connected = false;
+                    connect_start_time = {};
+                    // Fall through to create a new socket below
+                } else {
+                    return false; // Still connecting
+                }
+            } else {
+                return false;
+            }
+        } else {
+            closesocket(socket_fd);
+            socket_fd = INVALID_SOCKET;
+            connected = false;
+            connect_start_time = {};
+            return false;
+        }
+    }
+
+    // Create new socket and attempt connection
     socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd == INVALID_SOCKET) {
         ERROR_LOG(MAPLE, "VmuNetworkClient: Failed to create socket");
@@ -352,6 +437,7 @@ bool VmuNetworkClient::connect() {
     }
     
     setSocketNonBlocking();
+    connect_start_time = std::chrono::steady_clock::now();
     
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
@@ -361,8 +447,25 @@ bool VmuNetworkClient::connect() {
 #else
     inet_pton(AF_INET, DEFAULT_HOST, &addr.sin_addr);
 #endif
-    
-    if (::connect(socket_fd, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+
+    int result = ::connect(socket_fd, (struct sockaddr*)&addr, sizeof(addr));
+
+    if (result == 0) {
+        // Handshake call
+        if (performHandshake()) {
+            connected = true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10)); // avoid race conditions
+            return true;
+        } else {
+            return false;
+        }
+    } else {
+    #ifdef _WIN32
+        int error = WSAGetLastError();
+    #else
+        int error = errno;
+    #endif
+        connected = false;
         closesocket(socket_fd);
         socket_fd = INVALID_SOCKET;
         return false;

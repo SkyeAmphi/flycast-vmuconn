@@ -29,6 +29,8 @@
     #define closesocket close
 #endif
 
+#define MAPLE_PORT_A1 0x01
+
 #include <string>
 #include <memory>
 #include <chrono>
@@ -47,14 +49,12 @@ struct MapleMsg {
     u32 getDataSize() const { return size * 4; }
 };
 
-// Forward declaration for clean interfaces
-class NetworkVmuManager;
-
 class VmuNetworkClient {
 private:
     static constexpr int DEFAULT_PORT = 37393;
     static constexpr const char* DEFAULT_HOST = "127.0.0.1";
     
+    std::chrono::steady_clock::time_point connect_start_time;
     SOCKET socket_fd = INVALID_SOCKET;
     mutable bool connected = false;  // mutable for isConnected() const
     mutable std::mutex client_mutex; // Add mutex for thread safety
@@ -65,6 +65,7 @@ public:
     VmuNetworkClient();
     ~VmuNetworkClient();
     
+    bool performHandshake();
     bool connect();
     void disconnect();
     bool isConnected() const;
