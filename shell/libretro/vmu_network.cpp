@@ -470,10 +470,25 @@ bool VmuNetworkClient::connect() {
         socket_fd = INVALID_SOCKET;
         return false;
     }
-    
-    setSocketNonBlocking();
-    connected = true;
-    return true;
+
+#ifdef _WIN32
+    int error = WSAGetLastError();
+    if (error == WSAEWOULDBLOCK) {
+        return false; // Will complete asynchronously
+    } else {
+        closesocket(socket_fd);
+        socket_fd = INVALID_SOCKET;
+        return false;
+    }
+#else
+    if (errno == EINPROGRESS) {
+        return false; // Will complete asynchronously  
+    } else {
+        closesocket(socket_fd);
+        socket_fd = INVALID_SOCKET;
+        return false;
+    }
+#endif
 }
 
 void VmuNetworkClient::disconnect() {
