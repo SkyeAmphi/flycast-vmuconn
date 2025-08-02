@@ -509,6 +509,7 @@ u32 dma(u32 cmd) override
                 msg.size = std::min(dma_count_in / 4, (u32)31);
                 memcpy(msg.data, dma_buffer_in, dma_count_in);
 
+                DEBUG_LOG(MAPLE, "VmuNetworkClient: Sending non-LCD command %02X to port %02X, size %d", 
                          msg.command, msg.destAP, msg.size);
 
                 network_client->sendMapleMessage(msg);
