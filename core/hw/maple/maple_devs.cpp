@@ -460,73 +460,62 @@ struct maple_sega_vmu: maple_base
 
 u32 dma(u32 cmd) override
 {
-    bool network_handled = false;
-
     // Network VMU hook - check if this is port A1 and network is enabled
     if (bus_id == 0 && bus_port == 0) {
 #ifdef LIBRETRO
-        // If we have a working network connection, send VMU operations to DreamPotato
         VmuNetworkClient* network_client = getNetworkVmuClient();
         if (network_client && network_client->isConnected()) {
-            MapleMsg msg;
-            msg.command = cmd & 0xFF;
-            msg.destAP = 0x20; // Port A, Slot 1
-            msg.originAP = 0;
-            msg.size = std::min(dma_count_in / 4, (u32)31); // Max 31 words
 
-            if (dma_count_in <= 124) { // 31 words * 4 bytes
-                memcpy(msg.data, dma_buffer_in, dma_count_in);
+            // Add detailed debugging for ALL commands
 
-                if (network_client->sendMapleMessage(msg)) {
-                    MapleMsg response;
-                    if (network_client->receiveMapleMessage(response)) {
-                        // Handle different types of network operations
-                        if (cmd == MDCF_BlockWrite && response.command == MDRS_DeviceReply) {
-                            u32 function = *(u32 *)&dma_buffer_in[4];
+            // Check specifically for BlockWrite commands with LCD data
+			if (cmd == MDCF_BlockWrite && dma_count_in >= 8) { // MDCF_BlockWrite is 0x0C
+				char hexbuf[256] = {0};
+				for (u32 i = 0; i < std::min((u32)32, dma_count_in); ++i)
+					sprintf(hexbuf + i * 3, "%02X ", dma_buffer_in[i]);
+				u32 function = *(u32 *)&dma_buffer_in[0];
 
-                            if (function == MFID_1_Storage) {
-                                // Storage operations - sync with DreamPotato's authoritative data
-                                u32 bph = *(u32 *)&dma_buffer_in[8];
-                                u32 Block = (SWAP32(bph)) & 0xffff;
-                                u32 Phase = ((SWAP32(bph)) >> 16) & 0xff;
-                                u32 write_adr = Block * 512 + Phase * (512 / 4);
-                                u32 write_len = dma_count_in - 12;
+                if (function == MFID_2_LCD) {
 
-                                if (write_adr + write_len <= sizeof(flash_data)) {
-                                    // Update local flash with the data that was sent to DreamPotato
-                                    memcpy(&flash_data[write_adr], &dma_buffer_in[12], write_len);
+                    // Create and send LCD message
+                    MapleMsg msg;
+                    msg.command = MDCF_BlockWrite; // Send as 0x0C for DreamPotato network protocol
+                    msg.destAP = 0x01; // Port A1 for DreamPotato addressing
+                    msg.originAP = 0;
+                    msg.size = std::min(dma_count_in / 4, (u32)31);
 
-                                    if (network_client->syncFlashBlock(Block, flash_data)) {
-                                        // Mark for file save and force immediate persistence
-                                        fullSaveNeeded = true;
-                                        if (file != nullptr) {
-                                            if (std::fseek(file, Block * 512, SEEK_SET) == 0) {
-                                                std::fwrite(&flash_data[Block * 512], 512, 1, file);
-                                                std::fflush(file);
-                                            }
-                                        }
-                                    }
-                                }
-                                // For storage, we handled it completely - skip normal processing
-                                network_handled = true;
-                                ERROR_LOG(MAPLE, "💾 Network VMU: Storage write synced with DreamPotato");
+                    if (dma_count_in <= 124) {
+                        memcpy(msg.data, dma_buffer_in, dma_count_in);
+
+                        if (network_client->sendMapleMessage(msg)) {
+
+                            MapleMsg response;
+                            if (network_client->receiveMapleMessage(response)) {
+                            } else {
                             }
-                            else if (function == MFID_2_LCD) {
-                                // For LCD, we sent it to DreamPotato but still want normal processing
-                                // to update flycast's local VMU screen
-                                ERROR_LOG(MAPLE, "📺 Network VMU: LCD graphics sent to DreamPotato - will also update local screen");
-                            }
+                        } else {
                         }
+                    } else {
                     }
                 }
+			}
+
+			// For all other commands (non-LCD), send them too for debugging
+            else if (dma_count_in <= 124) {
+                MapleMsg msg;
+                msg.command = cmd & 0xFF;
+                msg.destAP = 0x01;
+                msg.originAP = 0;
+                msg.size = std::min(dma_count_in / 4, (u32)31);
+                memcpy(msg.data, dma_buffer_in, dma_count_in);
+
+                         msg.command, msg.destAP, msg.size);
+
+                network_client->sendMapleMessage(msg);
+                // Don't wait for response on non-LCD commands to avoid blocking
             }
         }
 #endif
-    }
-    
-    // Skip normal processing ONLY for storage writes that were handled by network
-    if (network_handled) {
-        return MDRS_DeviceReply;
     }
 
     //printf("maple_sega_vmu::dma Called for port %d:%d, Command %d\n", bus_id, bus_port, cmd);
@@ -741,6 +730,27 @@ u32 dma(u32 cmd) override
 							return MDRE_FileError; //invalid params
 						}
 						rptr(&flash_data[write_adr],write_len);
+
+#ifdef LIBRETRO
+						if (bus_id == 0 && bus_port == 0)
+						{
+							VmuNetworkClient *network_client = getNetworkVmuClient();
+							if (network_client && network_client->isConnected())
+							{
+								// Only sync after the last phase (DreamPotato expects 4 phases per block)
+								if (Phase == 3)
+								{
+									if (!network_client->syncFlashBlock(Block, flash_data))
+									{
+										// Optionally: return MDRE_FileError;
+									}
+									else
+									{
+									}
+								}
+							}
+						}
+#endif
 
 						if (file != nullptr)
 						{
