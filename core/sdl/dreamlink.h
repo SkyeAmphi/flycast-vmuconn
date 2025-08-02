@@ -23,11 +23,7 @@
 
 #include "types.h"
 #include "emulator.h"
-
-#if (defined(_WIN32) || defined(__linux__) || (defined(__APPLE__) && defined(TARGET_OS_MAC))) && !defined(TARGET_UWP) && defined(USE_SDL)
-#define USE_DREAMCASTCONTROLLER 1
 #include "sdl_gamepad.h"
-#endif
 
 #include <functional>
 #include <memory>
@@ -106,11 +102,9 @@ public:
 		return -1;
 	}
 
-#if defined(USE_SDL)
 	//! Allows a DreamLink device to dictate the default mapping
 	virtual void setDefaultMapping(const std::shared_ptr<InputMapping>& mapping) const {
 	}
-#endif
 
 	//! Allows button names to be defined by a DreamLink device
 	//! @param[in] code The button code to retrieve name of
@@ -152,140 +146,36 @@ public:
 	virtual void disconnect() = 0;
 };
 
-// Complete manager interface with owned state
-class DreamLinkManager {
-private:
-    std::vector<std::shared_ptr<DreamLink>> dreamLinks;
-    std::shared_ptr<DreamLink> reconnectCandidate = nullptr;
-    
+class DreamLinkGamepad : public SDLGamepad
+{
 public:
-    virtual ~DreamLinkManager() = default;
+    DreamLinkGamepad(int maple_port, int joystick_idx, SDL_Joystick* sdl_joystick);
+	~DreamLinkGamepad();
 
-    // Core operations (platform-specific)
-    virtual void processVblank() = 0;
-    virtual void handleReconnect() = 0;
-    virtual void reloadAllConfigurations() = 0;
-    virtual void createDevices(std::shared_ptr<DreamLink> link, bool gameStart) = 0;
-    virtual void tearDownDevices(std::shared_ptr<DreamLink> link) = 0;
+	void set_maple_port(int port) override;
+	void registered() override;
+	static bool isDreamcastController(int deviceIndex);
+	void resetMappingToDefault(bool arcade, bool gamepad) override;
+	const char *get_button_name(u32 code) override;
+	const char *get_axis_name(u32 code) override;
 
-    // State management (base implementations)
-    virtual void addDreamLink(std::shared_ptr<DreamLink> link) {
-        if (link && std::find(dreamLinks.begin(), dreamLinks.end(), link) == dreamLinks.end()) {
-            dreamLinks.push_back(link);
-        }
-    }
-    
-    virtual void removeDreamLink(std::shared_ptr<DreamLink> link) {
-        auto it = std::find(dreamLinks.begin(), dreamLinks.end(), link);
-        if (it != dreamLinks.end()) {
-            dreamLinks.erase(it);
-        }
-    }
-    
-    virtual const std::vector<std::shared_ptr<DreamLink>>& getDreamLinks() const {
-        return dreamLinks;
-    }
-    
-    virtual std::vector<std::shared_ptr<DreamLink>>& getDreamLinksMutable() {
-        return dreamLinks;
-    }
+protected:
+	std::shared_ptr<InputMapping> getDefaultMapping() override;
+	void setBaseDefaultMapping(const std::shared_ptr<InputMapping>& mapping) const;
 
-    // Reconnection handling (base implementations)
-    virtual void markForReconnect(std::shared_ptr<DreamLink> link) {
-        reconnectCandidate = link;
-    }
-    
-    virtual std::shared_ptr<DreamLink> getReconnectCandidate() const {
-        return reconnectCandidate;
-    }
-    
-    virtual void clearReconnectCandidate() {
-        reconnectCandidate = nullptr;
-    }
-    
-    // Factory method preparation
-    virtual std::shared_ptr<DreamLink> createDreamLink(const std::string& type, const std::string& config = "") {
-        return nullptr; // Base implementation returns null
-    }
+private:
+	static void handleEvent(Event event, void *arg);
 
-    // protected: // TODO figure out what to do with these
-	// std::shared_ptr<InputMapping> getDefaultMapping() override;
-	// void setBaseDefaultMapping(const std::shared_ptr<InputMapping>& mapping) const;
+	std::shared_ptr<DreamLink> dreamlink;
+	bool ltrigPressed = false;
+	bool rtrigPressed = false;
+	bool startPressed = false;
+	std::string device_guid;
 };
 
-// Global manager instance
-extern std::unique_ptr<DreamLinkManager> g_dreamlink_manager;
-
-// Platform-specific implementations
-#if !defined(LIBRETRO)
-    // Forward declaration to avoid SDL dependency in header
-    class SDLGamepad;
-    
-    class SDLDreamLinkManager : public DreamLinkManager {
-    public:
-        void processVblank() override;
-        void handleReconnect() override;
-        void reloadAllConfigurations() override;
-        void createDevices(std::shared_ptr<DreamLink> link, bool gameStart) override;
-        void tearDownDevices(std::shared_ptr<DreamLink> link) override;
-        
-    // Factory methods for SDL
-    std::shared_ptr<DreamLink> createDreamLink(const std::string& type, const std::string& config = "") override;
-};
-
-// Forward declaration for DreamLinkGamepad - full definition in implementation file
-class DreamLinkGamepad;
-
-#else // LIBRETRO
-    
-    class LibretroDreamLinkManager : public DreamLinkManager {
-    public:
-        void processVblank() override;
-        void handleReconnect() override;
-        void reloadAllConfigurations() override;
-        void createDevices(std::shared_ptr<DreamLink> link, bool gameStart) override;
-        void tearDownDevices(std::shared_ptr<DreamLink> link) override;
-    };
-    
-#endif
-
-// Global manager instance
-extern std::unique_ptr<DreamLinkManager> g_dreamlink_manager;
-
-// Manager initialization
-void initializeDreamLinkManager();
-void shutdownDreamLinkManager();
-
-// Unified API (replaces ALL global functions and variables)
-inline std::vector<std::shared_ptr<DreamLink>>& getAllDreamLinks() {
-    static std::vector<std::shared_ptr<DreamLink>> empty;
-    return g_dreamlink_manager ? g_dreamlink_manager->getDreamLinksMutable() : empty;
-}
-
-inline std::shared_ptr<DreamLink> getDreamLinkNeedsReconnect() {
-    return g_dreamlink_manager ? g_dreamlink_manager->getReconnectCandidate() : nullptr;
-}
-
-inline void setDreamLinkNeedsReconnect(std::shared_ptr<DreamLink> link) {
-    if (g_dreamlink_manager) {
-        g_dreamlink_manager->markForReconnect(link);
-    }
-}
-
-inline void clearDreamLinkNeedsReconnect() {
-    if (g_dreamlink_manager) {
-        g_dreamlink_manager->clearReconnectCandidate();
-    }
-}
-
-inline void createDreamLinkDevices(std::shared_ptr<DreamLink> link, bool gameStart) {
-    if (g_dreamlink_manager) {
-        g_dreamlink_manager->createDevices(link, gameStart);
-    }
-}
-
-inline void tearDownDreamLinkDevices(std::shared_ptr<DreamLink> link) {
-    if (g_dreamlink_manager) {
-        g_dreamlink_manager->tearDownDevices(link);
-    }
-}
+extern std::shared_ptr<DreamLink> dreamlink_needs_reconnect;
+extern std::vector<std::shared_ptr<DreamLink>> allDreamLinks;
+void reconnectDreamLinkDevicesIfNeeded();
+void handleReconnectDreamLinkDevices();
+void createDreamLinkDevices(std::shared_ptr<DreamLink> dreamlink, bool gameStart, bool saveState);
+void tearDownDreamLinkDevices(std::shared_ptr<DreamLink> dreamlink);

@@ -8,13 +8,11 @@
 #include "network/ggpo.h"
 #include "hw/naomi/card_reader.h"
 
-#include <memory>
-#ifndef LIBRETRO
-// TODO: should we move these to maple folder?
-// Would help non-sdl builds
-#include <sdl/dreamlink.h>
-#include <sdl/dreamconn.h>
+#ifdef USE_DREAMCASTCONTROLLER
+#include "sdl/dreamlink.h"
 #endif
+
+#include <memory>
 
 enum MaplePattern
 {
@@ -53,11 +51,8 @@ bool SDCKBOccupied;
 
 void maple_vblank()
 {
-#ifndef LIBRETRO
-    for (auto& dreamlink : getAllDreamLinks())
-    {
-        dreamlink->reloadConfigurationIfNeeded();
-    }
+#if USE_DREAMCASTCONTROLLER
+	reconnectDreamLinkDevicesIfNeeded();
 #endif
 
 	if (SB_MDEN & 1)
@@ -388,13 +383,6 @@ static u64 reconnect_time;
 
 void maple_ReconnectDevices()
 {
-#ifndef LIBRETRO
-    auto reconnectLink = getDreamLinkNeedsReconnect();
-    if (reconnectLink)
-    {
-        tearDownDreamLinkDevices(reconnectLink);
-    }
-#endif
 	mcfg_DestroyDevices();
 	reconnect_time = sh4_sched_now64() + SH4_MAIN_CLOCK / 10;
 }
@@ -406,13 +394,8 @@ static void maple_handle_reconnect()
 		reconnect_time = 0;
 		mcfg_CreateDevices();
 
-#ifndef LIBRETRO
-        auto reconnectLink = getDreamLinkNeedsReconnect();
-        if (reconnectLink)
-        {
-            createDreamLinkDevices(reconnectLink, false); // TODO might need extra false argument- check references
-            clearDreamLinkNeedsReconnect();
-        }
+#if defined(USE_DREAMCASTCONTROLLER)
+		handleReconnectDreamLinkDevices();
 #endif
 	}
 }

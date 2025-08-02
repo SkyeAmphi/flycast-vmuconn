@@ -178,16 +178,13 @@ DreamLinkGamepad::~DreamLinkGamepad() {
     EventManager::unlisten(Event::Start, handleEvent, this);
     EventManager::unlisten(Event::LoadState, handleEvent, this);
     EventManager::unlisten(Event::Terminate, handleEvent, this);
-    
-    if (dreamlink) {
-        tearDownDreamLinkDevices(dreamlink);
-        
-        // Remove from manager instead of global vector
-        if (g_dreamlink_manager) {
-            g_dreamlink_manager->removeDreamLink(dreamlink);
-        }
-        
-        dreamlink.reset();
+	if (dreamlink) {
+		tearDownDreamLinkDevices(dreamlink);
+		dreamlink.reset();
+		allDreamLinks.erase(
+			std::remove(allDreamLinks.begin(), allDreamLinks.end(), dreamlink),
+			allDreamLinks.end()
+		);
 
         // Make sure settings are open in case disconnection happened mid-game
         if (!gui_is_open()) {
@@ -323,125 +320,34 @@ void DreamLinkGamepad::setBaseDefaultMapping(const std::shared_ptr<InputMapping>
 	}
 }
 
-void DreamLinkGamepad::checkKeyCombo() {
-    if (ltrigPressed && rtrigPressed && startPressed)
-        gui_open_settings();
+#else // USE_DREAMCASTCONTROLLER
+
+bool DreamLinkGamepad::isDreamcastController(int deviceIndex) {
+	return false;
+}
+DreamLinkGamepad::DreamLinkGamepad(int maple_port, int joystick_idx, SDL_Joystick* sdl_joystick)
+	: SDLGamepad(maple_port, joystick_idx, sdl_joystick) {
+}
+DreamLinkGamepad::~DreamLinkGamepad() {
+}
+void DreamLinkGamepad::set_maple_port(int port) {
+	SDLGamepad::set_maple_port(port);
+}
+void DreamLinkGamepad::registered() {
+}
+void DreamLinkGamepad::resetMappingToDefault(bool arcade, bool gamepad) {
+	SDLGamepad::resetMappingToDefault(arcade, gamepad);
+}
+const char *DreamLinkGamepad::get_button_name(u32 code) {
+	return SDLGamepad::get_button_name(code);
+}
+const char *DreamLinkGamepad::get_axis_name(u32 code) {
+	return SDLGamepad::get_axis_name(code);
+}
+std::shared_ptr<InputMapping> DreamLinkGamepad::getDefaultMapping() {
+	return SDLGamepad::getDefaultMapping();
+}
+void DreamLinkGamepad::setBaseDefaultMapping(const std::shared_ptr<InputMapping>& mapping) const {
 }
 
-// SDL Manager Implementation
-void SDLDreamLinkManager::processVblank() {
-    // Check for configuration reloads
-    for (auto& link : getDreamLinks()) {
-        if (link) {
-            link->reloadConfigurationIfNeeded();
-        }
-    }
-}
-
-void SDLDreamLinkManager::handleReconnect() {
-    auto reconnectLink = getReconnectCandidate();
-    if (reconnectLink) {
-        tearDownDevices(reconnectLink, false);
-        createDevices(reconnectLink, false);
-        clearReconnectCandidate();
-    }
-}
-
-void SDLDreamLinkManager::reloadAllConfigurations() {
-    for (auto& link : getDreamLinks()) {
-        if (link) {
-            link->reloadConfigurationIfNeeded();
-        }
-    }
-}
-
-void SDLDreamLinkManager::createDevices(std::shared_ptr<DreamLink> link, bool gameStart) {
-    if (!link) return;
-    
-    int bus = link->getBus();
-    if (bus < 0 || bus >= 4) return;
-
-    // Create VMU device if supported
-    if (link->getFunctionCode(1) != 0) {
-        // VMU logic here
-        NOTICE_LOG(INPUT, "Creating VMU device for DreamLink bus %d", bus);
-    }
-    
-    // Create rumble device if supported  
-    if (link->getFunctionCode(2) != 0) {
-        // Rumble logic here
-        NOTICE_LOG(INPUT, "Creating rumble device for DreamLink bus %d", bus);
-    }
-}
-
-void SDLDreamLinkManager::tearDownDevices(std::shared_ptr<DreamLink> link) {
-    if (!link) return;
-    
-    int bus = link->getBus();
-    NOTICE_LOG(INPUT, "Tearing down DreamLink devices for bus %d", bus);
-    
-    // Teardown logic here
-}
-
-std::shared_ptr<DreamLink> SDLDreamLinkManager::createDreamLink(const std::string& type, const std::string& config) {
-    // Factory method for future config-driven creation
-    if (type == "dreamconn") {
-        // Parse config for bus number
-        int bus = 0; // Default or parse from config
-        return std::make_shared<DreamConn>(bus);
-    }
-    // Add other types as needed
-    return nullptr;
-}
-
-#else // LIBRETRO defined ?
-
-// Stub implementations for builds without DreamLink support
-class DreamLinkGamepad : public SDLGamepad {
-public:
-    static bool isDreamcastController(int deviceIndex) { return false; }
-    DreamLinkGamepad(int maple_port, int joystick_idx, SDL_Joystick* sdl_joystick) : SDLGamepad(maple_port, joystick_idx, sdl_joystick) {}
-    virtual ~DreamLinkGamepad() {}
-    void set_maple_port(int port) override { SDLGamepad::set_maple_port(port); }
-    void registered() override {}
-    bool gamepad_btn_input(u32 code, bool pressed) override { return SDLGamepad::gamepad_btn_input(code, pressed); }
-    bool gamepad_axis_input(u32 code, int value) override { return SDLGamepad::gamepad_axis_input(code, value); }
-    void resetMappingToDefault(bool arcade, bool gamepad) override { SDLGamepad::resetMappingToDefault(arcade, gamepad); }
-    const char *get_button_name(u32 code) override { return SDLGamepad::get_button_name(code); }
-    const char *get_axis_name(u32 code) override { return SDLGamepad::get_axis_name(code); }
-    std::shared_ptr<InputMapping> getDefaultMapping() override { return SDLGamepad::getDefaultMapping(); }
-};
-
-#endif // LIBRETRO ?
-
-#endif // USE_DREAMCASTCONTROLLER
-
-// LIBRETRO IMPLEMENTATIONS
-#if defined(LIBRETRO)
-
-// LibRetro Manager Implementation (No-op for most functions)
-void LibretroDreamLinkManager::processVblank() {
-    // LibRetro handles device updates through RetroArch
-    // Could add network VMU status checks here in the future
-}
-
-void LibretroDreamLinkManager::handleReconnect() {
-    // LibRetro handles reconnection through core options
-    // Could trigger VMU network reconnection here
-}
-
-void LibretroDreamLinkManager::reloadAllConfigurations() {
-    // LibRetro configurations are handled via core options
-    // No action needed for current implementation
-}
-
-void LibretroDreamLinkManager::createDevices(std::shared_ptr<DreamLink> link, bool gameStart) {
-    // No-op for libretro - DreamLink devices not supported
-    // Physical controller integration happens through RetroArch's input system
-}
-
-void LibretroDreamLinkManager::tearDownDevices(std::shared_ptr<DreamLink> link) {
-    // No-op for libretro - DreamLink devices not supported
-}
-
-#endif // defined(LIBRETRO)
+#endif
