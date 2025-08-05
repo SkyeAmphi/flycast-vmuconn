@@ -70,8 +70,6 @@ void shutdownDreamLinkManager() {
     g_dreamlink_manager.reset();
 }
 
-// SDL-specific DreamLinkGamepad implementation
-#ifndef LIBRETRO
 
 class DreamLinkGamepad : public SDLGamepad {
 private:
