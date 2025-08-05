@@ -682,5 +682,100 @@ bool VmuNetworkClient::receiveMapleMessage(MapleMsg& msg) {
         INFO_LOG(MAPLE, "💾 Network VMU: Save data updated via DreamPotato");
     }
 
-    return true;
+bool VmuNetworkClient::syncFlashBlock(u32 block_number, u8* local_flash_data) {
+    if (std::this_thread::get_id() == worker_thread_id) {
+        // Worker thread - can use ALL existing blocking logic
+        std::lock_guard<std::mutex> lock(client_mutex);
+        if (!connected) return false;
+
+        auto start_time = std::chrono::steady_clock::now();
+        constexpr auto TIMEOUT_MS = std::chrono::milliseconds(2000); // 2 seconds timeout
+
+        // DreamPotato expects 4 phases of 128 bytes each to write a full 512-byte block
+        for (u32 phase = 0; phase < 4; phase++) {
+            // Send one phase (128 bytes)
+            MapleMsg writeMsg = {};
+            writeMsg.command = MDCF_BlockWrite;
+            writeMsg.destAP = 0x01; // Port A, Slot 1
+            writeMsg.originAP = 0;
+            writeMsg.size = 34; // 2 words header + 32 words data = 34 words total
+
+            // Format matching DreamPotato's expected format
+            *(u32*)&writeMsg.data[0] = MFID_1_Storage;
+
+            // Pack block number and phase correctly for DreamPotato
+            u32 blockPhaseData = (block_number << 24) | (phase << 8) | 0; // pt = 0
+            *(u32*)&writeMsg.data[4] = blockPhaseData;
+
+            // Copy 128 bytes for this phase
+            u32 phase_offset = phase * 128;
+            memcpy(&writeMsg.data[8], &local_flash_data[block_number * 512 + phase_offset], 128);
+
+            if (!sendMapleMessage(writeMsg)) {
+                return false;
+            }
+
+            // Receive acknowledgment for this phase
+            MapleMsg writeResponse;
+            while (true) {
+                if (receiveMapleMessage(writeResponse)) break;
+                if (std::chrono::steady_clock::now() - start_time > TIMEOUT_MS) {
+                    return false;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10)); // OK on worker thread
+            }
+            if (writeResponse.command != MDRS_DeviceReply) {
+                return false;
+            }
+        }
+
+        // Step 2: Read back the complete updated block from DreamPotato
+        MapleMsg readMsg = {};
+        readMsg.command = MDCF_BlockRead;
+        readMsg.destAP = 0x01; // Port A, Slot 1
+        readMsg.originAP = 0;
+        readMsg.size = 2; // 8 bytes / 4 = 2 words
+
+        *(u32*)&readMsg.data[0] = MFID_1_Storage;
+        u32 readBlockData = (block_number << 24) | (0 << 8) | 0; // phase 0, pt 0 for read
+        *(u32*)&readMsg.data[4] = readBlockData;
+
+        if (!sendMapleMessage(readMsg)) {
+            return false;
+        }
+
+        MapleMsg response;
+        if (!receiveMapleMessage(response)) {
+            return false;
+        }
+
+        // Step 3: Update our local flash with DreamPotato's version
+        if (response.command == MDRS_DataTransfer && response.getDataSize() >= 520) {
+            // DreamPotato response format: function(4) + blockdata(4) + payload(512)
+            u32 response_function = *(u32*)&response.data[0];
+            u32 response_block_data = *(u32*)&response.data[4];
+            u32 response_block = (response_block_data >> 24) & 0xFF;
+
+            if (response_function == MFID_1_Storage && response_block == block_number) {
+                // Update our local flash with DreamPotato's authoritative version
+                memcpy(&local_flash_data[block_number * 512], &response.data[8], 512);
+                return true;
+            }
+        }
+
+        return false;
+    } else {
+        // Main thread - delegate to worker thread (non-blocking)
+        if (!thread_safe_connected.load()) {
+            return false;
+        }
+
+        NetworkCommand cmd(NetworkCommand::SYNC_FLASH_BLOCK);
+        cmd.block_number = block_number;
+        memcpy(cmd.flash_data, &local_flash_data[block_number * 512], 512);
+
+        submitFireAndForgetCommand(cmd);
+
+        return true; // Successfully queued (zero blocking!)
+    }
 }
