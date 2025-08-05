@@ -478,113 +478,161 @@ VmuNetworkClient::~VmuNetworkClient() {
 #endif
 }
 
-bool VmuNetworkClient::connect() {
-    
-    if (connected && isConnected()) return true; // Add isConnected() check
+bool VmuNetworkClient::connect()
+{
+    if (std::this_thread::get_id() == worker_thread_id)
+    {
 
-    // Check existing socket completion
-    if (socket_fd != INVALID_SOCKET) {
-        fd_set write_set;
-        FD_ZERO(&write_set);
-        FD_SET(socket_fd, &write_set);
-        struct timeval timeout = {0, 0};
-        
-        int result = select(socket_fd + 1, nullptr, &write_set, nullptr, &timeout);
-        if (result > 0 && FD_ISSET(socket_fd, &write_set)) {
-            int error = 0;
-            socklen_t len = sizeof(error);
-            if (getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, (char *)&error, &len) == 0) {
-                if (performHandshake()) {
+        if (connected && isConnected())
+            return true;
+
+        // Check if we have an existing socket in progress
+        if (socket_fd != INVALID_SOCKET)
+        {
+            fd_set write_set;
+            FD_ZERO(&write_set);
+            FD_SET(socket_fd, &write_set);
+            struct timeval timeout = {0, 0};
+
+            int result = select(socket_fd + 1, nullptr, &write_set, nullptr, &timeout);
+            if (result > 0 && FD_ISSET(socket_fd, &write_set))
+            {
+                int error = 0;
+                socklen_t len = sizeof(error);
+                getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, (char *)&error, &len);
+                if (error == 0)
+                {
+                    // double check connection is actually working
+                    char test_byte;
+                    int test_result = recv(socket_fd, &test_byte, 1, MSG_PEEK);
+#ifdef _WIN32
+                    int test_error = WSAGetLastError();
+                    if (test_result == SOCKET_ERROR && (test_error == 10053 || test_error == 10054))
+                    {
+                        // Connection is actually broken
+                        closesocket(socket_fd);
+                        socket_fd = INVALID_SOCKET;
+                        connected = false;
+                        thread_safe_connected.store(false);
+                        connect_start_time = {};
+                        return false;
+                    }
+#endif
+                    // Connection truly established
                     connected = true;
+                    thread_safe_connected.store(true);
                     return true;
-                } else {
-                    return false;
                 }
-            }
-        } else if (result == 0) {
-            if (connect_start_time.time_since_epoch().count() > 0) {
-                auto now = std::chrono::steady_clock::now();
-                if (now - connect_start_time > std::chrono::seconds(5)) {
+                else
+                {
                     closesocket(socket_fd);
                     socket_fd = INVALID_SOCKET;
                     connected = false;
+                    thread_safe_connected.store(false);
                     connect_start_time = {};
-                    // Fall through to create a new socket below
-                } else {
-                    return false; // Still connecting
+                    return false;
                 }
-            } else {
+            }
+            else if (result == 0)
+            {
+                // Check timeout
+                if (connect_start_time.time_since_epoch().count() > 0)
+                {
+                    auto now = std::chrono::steady_clock::now();
+                    if (now - connect_start_time > std::chrono::seconds(5))
+                    {
+                        closesocket(socket_fd);
+                        socket_fd = INVALID_SOCKET;
+                        connected = false;
+                        thread_safe_connected.store(false);
+                        connect_start_time = {};
+                        return false;
+                    }
+                    else
+                    {
+                        return false; // Still connecting
+                    }
+                }
+                else
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                closesocket(socket_fd);
+                socket_fd = INVALID_SOCKET;
+                connected = false;
+                thread_safe_connected.store(false);
+                connect_start_time = {};
                 return false;
             }
-        } else {
+        }
+
+        // Create new socket and attempt connection
+        socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (socket_fd == INVALID_SOCKET)
+        {
+            return false;
+        }
+
+        ERROR_LOG(MAPLE, "VmuNetworkClient: Failed to create socket");
+        setSocketNonBlocking();
+        connect_start_time = std::chrono::steady_clock::now();
+
+        struct sockaddr_in addr;
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(DEFAULT_PORT);
+#ifdef _WIN32
+        addr.sin_addr.s_addr = inet_addr(DEFAULT_HOST);
+#else
+        inet_pton(AF_INET, DEFAULT_HOST, &addr.sin_addr);
+#endif
+
+        int result = ::connect(socket_fd, (struct sockaddr *)&addr, sizeof(addr));
+
+        if (result == 0)
+        {
+            // Immediate connect success
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            connected = true;
+            thread_safe_connected.store(true); // update atomic immediately
+            return true;
+        }
+
+#ifdef _WIN32
+        int error = WSAGetLastError();
+        if (error == WSAEWOULDBLOCK || error == WSAEINPROGRESS)
+        {
+            return false; // Will complete asynchronously in next update
+        }
+        else
+        {
+            connected = false;
             closesocket(socket_fd);
             socket_fd = INVALID_SOCKET;
+            return false;
+        }
+#else
+        if (errno == EINPROGRESS)
+        {
+            return false; // Will complete asynchronously in next update
+        }
+        else
+        {
             connected = false;
-            connect_start_time = {};
+            closesocket(socket_fd);
+            socket_fd = INVALID_SOCKET;
             return false;
         }
-    }
-
-    // Create new socket and attempt connection
-    socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (socket_fd == INVALID_SOCKET) {
-        ERROR_LOG(MAPLE, "VmuNetworkClient: Failed to create socket");
-        return false;
-    }
-    
-    setSocketNonBlocking();
-    connect_start_time = std::chrono::steady_clock::now();
-    
-    struct sockaddr_in addr;
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(DEFAULT_PORT);
-#ifdef _WIN32
-    addr.sin_addr.s_addr = inet_addr(DEFAULT_HOST);
-#else
-    inet_pton(AF_INET, DEFAULT_HOST, &addr.sin_addr);
 #endif
-
-    int result = ::connect(socket_fd, (struct sockaddr*)&addr, sizeof(addr));
-
-    if (result == 0) {
-        // Handshake call
-        if (performHandshake()) {
-            connected = true;
-            std::this_thread::sleep_for(std::chrono::milliseconds(10)); // avoid race conditions
-            return true;
-        } else {
-            return false;
-        }
-    } else {
-    #ifdef _WIN32
-        int error = WSAGetLastError();
-    #else
-        int error = errno;
-    #endif
-        connected = false;
-        closesocket(socket_fd);
-        socket_fd = INVALID_SOCKET;
-        return false;
     }
-
-#ifdef _WIN32
-    int error = WSAGetLastError();
-    if (error == WSAEWOULDBLOCK) {
-        return false; // Will complete asynchronously
-    } else {
-        closesocket(socket_fd);
-        socket_fd = INVALID_SOCKET;
-        return false;
+    else
+    {
+        NetworkCommand cmd(NetworkCommand::CONNECT);
+        submitFireAndForgetCommand(cmd);
+        return thread_safe_connected.load();
     }
-#else
-    if (errno == EINPROGRESS) {
-        return false; // Will complete asynchronously  
-    } else {
-        closesocket(socket_fd);
-        socket_fd = INVALID_SOCKET;
-        return false;
-    }
-#endif
 }
 
 void VmuNetworkClient::disconnect() {
