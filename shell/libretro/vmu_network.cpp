@@ -161,7 +161,7 @@ bool VmuNetworkClient::sendRawMessage(const std::string& message) {
 
     size_t total_sent = 0;
     auto start_time = std::chrono::steady_clock::now();
-    constexpr auto TIMEOUT_MS = std::chrono::milliseconds(5); // 5 ms timeout
+    constexpr auto TIMEOUT_MS = std::chrono::milliseconds(50); // 50 ms timeout
 
     while (total_sent < message.length()) {
         int result = send(socket_fd, message.c_str() + total_sent, 
@@ -174,6 +174,7 @@ bool VmuNetworkClient::sendRawMessage(const std::string& message) {
 
         if (result == 0) {
             connected = false;
+            thread_safe_connected.store(false);
             return false;
         }
 
@@ -211,7 +212,7 @@ bool VmuNetworkClient::receiveRawMessage(std::string& response) {
     response.clear();
 
     auto start_time = std::chrono::steady_clock::now();
-    constexpr auto TIMEOUT_MS = std::chrono::milliseconds(5); // 5 ms timeout
+    constexpr auto TIMEOUT_MS = std::chrono::milliseconds(100); // 100 ms timeout
 
     char ch;
     while (true) {
