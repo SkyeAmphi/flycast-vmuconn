@@ -181,18 +181,23 @@ bool VmuNetworkClient::sendRawMessage(const std::string& message) {
         int error = WSAGetLastError();
         if (error != WSAEWOULDBLOCK) {
             connected = false;
+            thread_safe_connected.store(false);
             return false;
         }
 #else
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             connected = false;
+            thread_safe_connected.store(false);
             return false;
         }
 #endif
 
         auto now = std::chrono::steady_clock::now();
         if (now - start_time > TIMEOUT_MS) {
-            return false; // Quick timeout
+            ERROR_LOG(MAPLE, "🔌 VmuNetworkClient: Send timeout - marking disconnected");
+            connected = false;
+            thread_safe_connected.store(false);
+            return false;
         }
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
@@ -286,7 +291,7 @@ bool NetworkVmuManager::attemptConnection() {
     if (!client) {
         client = std::make_unique<VmuNetworkClient>();
     }
-    
+
     return client->connect();
 }
 
@@ -295,7 +300,7 @@ void NetworkVmuManager::showConnectionMessage(const char* message, unsigned int 
     bool is_connection_established = strstr(message, "connected") != nullptr && strstr(message, "disconnected") == nullptr;
     bool is_disconnection = strstr(message, "disconnected") != nullptr;
     bool is_reconnection = strstr(message, "reconnected") != nullptr;
-    
+
     // Always log significant state changes
     if (is_connection_established || is_disconnection || is_reconnection) {
         INFO_LOG(MAPLE, "🔗 Network VMU: %s", message);
@@ -324,9 +329,6 @@ void NetworkVmuManager::setEnabled(bool enable) {
     }
 }
 
-bool NetworkVmuManager::isConnected() const {
-    return current_state == NetworkVmuState::CONNECTED;
-}
 
 void NetworkVmuManager::update() {
 
@@ -346,7 +348,7 @@ void NetworkVmuManager::update() {
                 enterState(NetworkVmuState::DISCONNECTED);
             }
             break;
-            
+
         case NetworkVmuState::DISCONNECTED:
             if (!enabled) {
                 enterState(NetworkVmuState::DISABLED);
@@ -354,7 +356,7 @@ void NetworkVmuManager::update() {
                 enterState(NetworkVmuState::CONNECTING);
             }
             break;
-            
+
         case NetworkVmuState::CONNECTING:
             if (!enabled) {
                 enterState(NetworkVmuState::DISABLED);
@@ -374,7 +376,7 @@ void NetworkVmuManager::update() {
                 // else: stay in CONNECTING and keep trying
             }
             break;
-            
+
         case NetworkVmuState::CONNECTED:
             if (!enabled) {
                 if (client) {
@@ -387,7 +389,7 @@ void NetworkVmuManager::update() {
                 enterState(NetworkVmuState::RECONNECTING);
             }
             break;
-            
+
         case NetworkVmuState::RECONNECTING:
             if (!enabled) {
                 enterState(NetworkVmuState::DISABLED);
@@ -443,10 +445,34 @@ VmuNetworkClient::VmuNetworkClient() : socket_fd(INVALID_SOCKET), connected(fals
     WSADATA wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
 #endif
+
+    // Start worker thread and capture its ID
+    worker_running.store(true);
+    worker_thread = std::thread([this]() {
+        worker_thread_id = std::this_thread::get_id(); // Capture worker thread ID
+        workerThreadMain();
+    });
+    ERROR_LOG(MAPLE, "VmuNetworkClient: Constructor completed, worker thread started");
 }
 
 VmuNetworkClient::~VmuNetworkClient() {
-    disconnect();
+    // Stop worker thread first
+    if (worker_running.load()) {
+        NetworkCommand shutdown_cmd(NetworkCommand::SHUTDOWN);
+        submitFireAndForgetCommand(shutdown_cmd);
+
+        // Wait for worker thread to finish
+        if (worker_thread.joinable()) {
+            worker_thread.join();
+        }
+    }
+
+    // Then cleanup socket
+    if (socket_fd != INVALID_SOCKET) {
+        closesocket(socket_fd);
+        socket_fd = INVALID_SOCKET;
+    }
+
 #ifdef _WIN32
     WSACleanup();
 #endif
@@ -562,20 +588,29 @@ bool VmuNetworkClient::connect() {
 }
 
 void VmuNetworkClient::disconnect() {
-    if (socket_fd != INVALID_SOCKET) {
-        closesocket(socket_fd);
-        socket_fd = INVALID_SOCKET;
+    if (std::this_thread::get_id() == worker_thread_id) {
+        if (socket_fd != INVALID_SOCKET) {
+            closesocket(socket_fd);
+            socket_fd = INVALID_SOCKET;
+        }
+        connected = false;
+    } else {
+        // Main thread - delegate to worker thread
+        NetworkCommand cmd(NetworkCommand::DISCONNECT);
+        submitFireAndForgetCommand(cmd);
     }
-    connected = false;
 }
 
-bool VmuNetworkClient::sendMapleMessage(const MapleMsg& msg) {
-    std::lock_guard<std::mutex> lock(client_mutex);
-    if (!connected) return false;
-
-    // Single-stream hex formatting
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0');
+bool VmuNetworkClient::sendMapleMessage(const MapleMsg &msg)
+{
+    // Always delegate to worker thread for thread safety
+    if (std::this_thread::get_id() != worker_thread_id)
+    {
+        // Main thread - delegate to worker thread (non-blocking)
+        if (!thread_safe_connected.load())
+        {
+            return false;
+        }
 
         NetworkCommand cmd(NetworkCommand::SEND_MESSAGE);
         cmd.message = msg;
