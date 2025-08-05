@@ -36,6 +36,11 @@
 #include <chrono>
 #include "types.h"  // For u8, u32 types
 #include <mutex>
+#include <queue>
+#include <thread>
+#include <condition_variable>
+#include <future>
+#include <atomic>
 
 typedef bool (*retro_environment_t)(unsigned cmd, void *data);
 
@@ -49,6 +54,29 @@ struct MapleMsg {
     u32 getDataSize() const { return size * 4; }
 };
 
+// Worker thread command structure
+struct NetworkCommand {
+    enum Type { 
+        CONNECT, 
+        DISCONNECT, 
+        SEND_MESSAGE, 
+        SYNC_FLASH_BLOCK,
+        SHUTDOWN 
+    };
+    Type type;
+    MapleMsg message;  // for SEND_MESSAGE
+    
+    // For SYNC_FLASH_BLOCK
+    u32 block_number = 0;
+    u8 flash_data[512]; // Copy of the 512-byte block
+    
+    // For async results (connect/send operations that need responses)
+    std::shared_ptr<std::promise<bool>> result_promise;
+    
+    NetworkCommand() = default;
+    NetworkCommand(Type t) : type(t) {}
+};
+
 class VmuNetworkClient {
 private:
     static constexpr int DEFAULT_PORT = 37393;
@@ -59,19 +87,37 @@ private:
     mutable bool connected = false;  // mutable for isConnected() const
     mutable std::mutex client_mutex; // Add mutex for thread safety
 
-        void setSocketNonBlocking(); // we dont want to block the main thread
+    // worker thread infrastructure
+    std::thread worker_thread;
+    std::atomic<bool> worker_running{false};
+    std::queue<NetworkCommand> command_queue;
+    std::mutex queue_mutex;
+    std::condition_variable queue_cv;
+
+    std::thread::id worker_thread_id; // Track worker thread ID
+    
+    // Thread-safe state
+    mutable std::atomic<bool> thread_safe_connected{false};
+
+    void setSocketNonBlocking(); // we dont want to block the main thread
+
+    void workerThreadMain();
+    void processCommands();
+    std::future<bool> submitCommand(NetworkCommand cmd);
+    void submitFireAndForgetCommand(NetworkCommand cmd);
     
 public:
     VmuNetworkClient();
     ~VmuNetworkClient();
     
-    bool performHandshake();
     bool connect();
     void disconnect();
     bool isConnected() const;
     
     bool sendMapleMessage(const MapleMsg& msg);
     bool receiveMapleMessage(MapleMsg& msg);
+
+    bool syncFlashBlock(u32 block_number, u8* local_flash_data);
     
 private:
     bool sendRawMessage(const std::string& message);
