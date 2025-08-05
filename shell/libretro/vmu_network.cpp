@@ -507,19 +507,52 @@ bool VmuNetworkClient::sendMapleMessage(const MapleMsg& msg) {
     std::ostringstream oss;
     oss << std::hex << std::setfill('0');
 
-    // Header
-    oss << std::setw(2) << (int)msg.command << " "
-        << std::setw(2) << (int)msg.destAP << " "
-        << std::setw(2) << (int)msg.originAP << " "
-        << std::setw(2) << (int)msg.size;
+        NetworkCommand cmd(NetworkCommand::SEND_MESSAGE);
+        cmd.message = msg;
+        submitFireAndForgetCommand(cmd);
 
-    // Data bytes
-    for (u32 i = 0; i < msg.getDataSize(); ++i) {
-        oss << " " << std::setw(2) << (int)msg.data[i];
+        return true; // Successfully queued (doesn't mean sent successfully)
     }
+    else
+    {
+        std::lock_guard<std::mutex> lock(client_mutex);
+        if (!connected)
+            return false;
 
-    oss << "\r\n";
-    return sendRawMessage(oss.str());
+        std::ostringstream oss;
+        oss << std::hex << std::uppercase << std::setfill('0');
+
+        // Send header: command, destAP, originAP, size
+        oss << std::setw(2) << (int)msg.command << " "
+            << std::setw(2) << (int)msg.destAP << " "
+            << std::setw(2) << (int)msg.originAP << " "
+            << std::setw(2) << (int)msg.size;
+
+        // Send all data bytes as hex with spaces
+        u32 dataSize = msg.getDataSize();
+        for (u32 i = 0; i < dataSize; ++i)
+        {
+            oss << " " << std::setw(2) << (int)msg.data[i];
+        }
+
+        if (dataSize > 0 || true)
+        { // Always add space for consistency
+            oss << " ";
+        }
+
+        oss << "\r\n";
+
+        std::string message = oss.str();
+
+        // DreamPotato expects: "XX XX XX XX ... \r\n"
+        // Each byte = "XX " (3 chars), final space before \r\n, then \r\n (2 chars)
+        u32 total_bytes = 4 + dataSize; // header + data bytes
+        u32 expected_length = total_bytes * 3 + 1 + 2; // each byte="XX ", extra space, \r\n
+
+                  (int)message.length(), expected_length, total_bytes);
+
+        return sendRawMessage(message);
+    }
 }
 
 bool VmuNetworkClient::receiveMapleMessage(MapleMsg& msg) {
