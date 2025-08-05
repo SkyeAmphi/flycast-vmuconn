@@ -2,11 +2,20 @@
 #include <chrono>
 #include <sstream>
 #include <iomanip>
+#include <cstring>
 #include <libretro.h>
 #include "hw/maple/maple_if.h" // For MDCF_* and MDRS_* constants
 #include "log/LogManager.h" // For INFO_LOG, WARN_LOG macros
 #ifndef _WIN32
     #include <fcntl.h>  // For fcntl() in setSocketNonBlocking()
+#endif
+#include <thread>
+#ifndef MDCF_BlockWrite
+#define MDCF_BlockWrite  0x0C
+#define MDCF_BlockRead   0x0B
+#define MDRS_DataTransfer 0x08
+#define MDRS_DeviceReply 0x07
+#define MFID_1_Storage   0x02000000
 #endif
 
 void VmuNetworkClient::setSocketNonBlocking() { // Set the socket to non-blocking mode
@@ -22,65 +31,126 @@ void VmuNetworkClient::setSocketNonBlocking() { // Set the socket to non-blockin
 #endif
 }
 
-bool VmuNetworkClient::performHandshake() {
-    MapleMsg handshake;
-    handshake.command = 0xFF;
-    handshake.destAP = 0x01;
-    handshake.originAP = 0x00;
-    handshake.size = 2;
-    const char* handshake_str = "DP_HANDSHAKE";
-    memcpy(handshake.data, handshake_str, std::min<size_t>(handshake.size * 4, strlen(handshake_str)));
+void VmuNetworkClient::workerThreadMain() {
 
-    if (!sendMapleMessage(handshake)) {
-        ERROR_LOG(MAPLE, "VmuNetworkClient: Failed to send handshake");
-        closesocket(socket_fd);
-        socket_fd = INVALID_SOCKET;
-        connected = false;
-        return false;
+    while (worker_running.load()) {
+        processCommands();
+
+        // Brief sleep to avoid busy waiting
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    MapleMsg response;
-    if (!receiveMapleMessage(response) || response.command != 0xFE) {
-        ERROR_LOG(MAPLE, "VmuNetworkClient: Handshake ACK not received");
-        closesocket(socket_fd);
-        socket_fd = INVALID_SOCKET;
-        connected = false;
-        return false;
-    }
+}
 
-    ERROR_LOG(MAPLE, "VmuNetworkClient: Handshake completed, connection established");
-    return true;
+void VmuNetworkClient::processCommands() {
+    std::unique_lock<std::mutex> lock(queue_mutex);
+
+    while (!command_queue.empty()) {
+        NetworkCommand cmd = std::move(command_queue.front());
+        command_queue.pop();
+        lock.unlock();
+
+        bool success = false;
+
+        switch (cmd.type) {
+            case NetworkCommand::CONNECT:
+                success = connect();
+                thread_safe_connected.store(success);
+                break;
+
+            case NetworkCommand::DISCONNECT:
+                disconnect();
+                thread_safe_connected.store(false);
+                success = true;
+                break;
+
+            case NetworkCommand::SEND_MESSAGE:
+                success = sendMapleMessage(cmd.message);
+                break;
+
+            case NetworkCommand::SYNC_FLASH_BLOCK:
+                success = syncFlashBlock(cmd.block_number, cmd.flash_data);
+                break;
+
+            case NetworkCommand::SHUTDOWN:
+                worker_running.store(false);
+                success = true;
+                break;
+        }
+
+        if (cmd.result_promise) {
+            cmd.result_promise->set_value(success);
+        }
+
+        lock.lock();
+    }
+}
+
+std::future<bool> VmuNetworkClient::submitCommand(NetworkCommand cmd) {
+    auto promise = std::make_shared<std::promise<bool>>();
+    auto future = promise->get_future();
+    cmd.result_promise = promise;
+
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex);
+        command_queue.push(std::move(cmd));
+    }
+    queue_cv.notify_one();
+
+    return future;
+}
+
+void VmuNetworkClient::submitFireAndForgetCommand(NetworkCommand cmd) {
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex);
+        command_queue.push(std::move(cmd));
+    }
+    queue_cv.notify_one();
 }
 
 // Enhanced VmuNetworkClient with better disconnect detection
-bool VmuNetworkClient::isConnected() const {
-    if (!connected) return false;
+bool VmuNetworkClient::isConnected() const
+{
+    if (std::this_thread::get_id() == worker_thread_id)
+    {
+        if (!connected)
+            return false;
 
-    // Test socket health with non-blocking peek
-    char test_byte;
+        // Thorough connection test
+        char test_byte;
 #ifdef _WIN32
-    // On Windows, use standard recv with MSG_PEEK (socket should already be non-blocking)
-    int result = recv(socket_fd, &test_byte, 1, MSG_PEEK);
-    int error = WSAGetLastError();
-    if (result == 0) {
-        connected = false;
-        return false;
-    } else if (result == SOCKET_ERROR && error != WSAEWOULDBLOCK) {
-        connected = false;
-        return false;
-    }
-#else
-    // On Unix systems, use MSG_DONTWAIT for non-blocking peek
-    int result = recv(socket_fd, &test_byte, 1, MSG_PEEK | MSG_DONTWAIT);
-    if (result == 0) {
-        connected = false;
-        return false;
-    } else if (result == SOCKET_ERROR && errno != EAGAIN && errno != EWOULDBLOCK) {
-        connected = false;
-        return false;
-    }
+        int result = recv(socket_fd, &test_byte, 1, MSG_PEEK);
+        int error = WSAGetLastError();
+
+        if (result == 0)
+        {
+            connected = false;
+            thread_safe_connected.store(false);
+            return false;
+        }
+
+        if (result == SOCKET_ERROR)
+        {
+            if (error == 10053 || error == 10054 || error == 10057)
+            {
+                connected = false;
+                thread_safe_connected.store(false);
+                return false;
+            }
+            else if (error != WSAEWOULDBLOCK)
+            {
+                connected = false;
+                thread_safe_connected.store(false);
+                return false;
+            }
+        }
 #endif
-    return true;
+        return connected;
+    }
+    else
+    {
+        return thread_safe_connected.load();
+    }
 }
 
 // Enhanced error handling in communication methods
