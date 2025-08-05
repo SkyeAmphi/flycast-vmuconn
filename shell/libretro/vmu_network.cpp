@@ -709,26 +709,35 @@ bool VmuNetworkClient::sendMapleMessage(const MapleMsg &msg)
 }
 
 bool VmuNetworkClient::receiveMapleMessage(MapleMsg& msg) {
-    std::lock_guard<std::mutex> lock(client_mutex);
-    if (!connected) return false;
-    std::string response;
-    if (!receiveRawMessage(response)) return false;
+    if (std::this_thread::get_id() == worker_thread_id) {
+        // Worker thread - can block safely
+        std::lock_guard<std::mutex> lock(client_mutex);
+        if (!connected) return false;
+        std::string response;
+        if (!receiveRawMessage(response)) return false;
 
-    // Clear message first for safety
-    msg = {};
+        // Clear message first for safety
+        msg = {};
 
-    // Decode ASCII hex back to MapleMsg
-    std::istringstream iss(response);
-    for (size_t i = 0; i < sizeof(MapleMsg); ++i) {
-        std::string byteStr;
-        if (!(iss >> byteStr)) break;
-        ((u8*)&msg)[i] = (u8)std::stoi(byteStr, nullptr, 16);
+        // Decode ASCII hex back to MapleMsg
+        std::istringstream iss(response);
+        for (size_t i = 0; i < sizeof(MapleMsg); ++i) {
+            std::string byteStr;
+            if (!(iss >> byteStr)) break;
+            ((u8*)&msg)[i] = (u8)std::stoi(byteStr, nullptr, 16);
+        }
+
+        // Log successful save write confirmations
+        if (msg.command == 0x07) { // MDRS_DeviceReply indicates success
+        }
+
+        return true;
+    } else {
+        // Main thread - this ideally should never happen
+        // since receiveMapleMessage is only called from syncFlashBlock worker path
+        return false;
     }
-
-    // Log successful save write confirmations
-    if (msg.command == 0x07) { // MDRS_DeviceReply indicates success
-        INFO_LOG(MAPLE, "💾 Network VMU: Save data updated via DreamPotato");
-    }
+}
 
 bool VmuNetworkClient::syncFlashBlock(u32 block_number, u8* local_flash_data) {
     if (std::this_thread::get_id() == worker_thread_id) {
